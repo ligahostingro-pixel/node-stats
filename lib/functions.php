@@ -2083,7 +2083,15 @@ function subscribe_email(string $email): array
             return ['ok' => false, 'error' => 'This email is already subscribed.'];
         }
         // Resend confirmation email
-        send_confirmation_email($email, (string)$existing['token']);
+        try {
+            $sendResult = send_confirmation_email($email, (string)$existing['token']);
+        } catch (\Throwable $e) {
+            error_log('[NOC] send_confirmation_email exception: ' . $e->getMessage());
+            $sendResult = 'Exception: ' . $e->getMessage();
+        }
+        if ($sendResult !== 'ok') {
+            return ['ok' => false, 'error' => 'Could not send confirmation email: ' . $sendResult];
+        }
         return ['ok' => true, 'message' => 'Confirmation email sent. Please check your inbox (and spam folder).', 'resend' => true, 'id' => (int)$existing['id']];
     }
 
@@ -2098,12 +2106,20 @@ function subscribe_email(string $email): array
         ':created_at' => time(),
     ]);
 
-    send_confirmation_email($email, $token);
+    try {
+        $sendResult = send_confirmation_email($email, $token);
+    } catch (\Throwable $e) {
+        error_log('[NOC] send_confirmation_email exception: ' . $e->getMessage());
+        $sendResult = 'Exception: ' . $e->getMessage();
+    }
+    if ($sendResult !== 'ok') {
+        return ['ok' => false, 'error' => 'Subscribed, but email failed: ' . $sendResult];
+    }
 
     return ['ok' => true, 'message' => 'Confirmation email sent! Please check your inbox (and spam folder) to confirm your subscription.', 'token' => $token, 'id' => (int)db()->lastInsertId()];
 }
 
-function send_confirmation_email(string $email, string $token): void
+function send_confirmation_email(string $email, string $token): string
 {
     error_log('[NOC] send_confirmation_email() called for: ' . $email);
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
@@ -2112,13 +2128,13 @@ function send_confirmation_email(string $email, string $token): void
     $fromEmail = trim(get_state_value('notify_from_email', ''));
     if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
         error_log('[NOC] send_confirmation_email: invalid notify_from_email: "' . $fromEmail . '"');
-        return;
+        return 'Sender email not configured (notify_from_email="' . $fromEmail . '")';
     }
 
     $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
     if ($baseUrl === '') {
         error_log('[NOC] send_confirmation_email: site_base_url is empty');
-        return;
+        return 'Site base URL not configured';
     }
 
     $confirmLink = $baseUrl . '/subscribe?action=confirm&token=' . rawurlencode($token);
@@ -2137,11 +2153,11 @@ function send_confirmation_email(string $email, string $token): void
         . '<p style="margin:20px 0 0;font-size:12px;color:#64748b;line-height:1.5;">If you did not request this, you can safely ignore this email.</p>';
 
     $bodyHtml = build_email_layout('#4EA8FF', "\xF0\x9F\x94\x94", 'CONFIRM SUBSCRIPTION', $inner, $networkAsn, $networkOrg, $baseUrl);
-    // No unsubscribe footer for confirmation emails
     $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
 
     $sent = smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
     error_log('[NOC] send_confirmation_email result for ' . $email . ': ' . ($sent ? 'OK' : 'FAILED'));
+    return $sent ? 'ok' : 'SMTP send failed (check error log for [SMTP] details)';
 }
 
 function confirm_subscriber(string $token): bool
@@ -2209,9 +2225,9 @@ function send_unsubscribe_email(string $email): bool
     $bodyHtml = build_email_layout('#EF4444', "\xF0\x9F\x94\x95", 'UNSUBSCRIBE', $inner, $networkAsn, $networkOrg, $baseUrl);
     $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
 
-    smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
-    error_log('[NOC] send_unsubscribe_email sent for: ' . $email);
-    return true;
+    $sent = smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
+    error_log('[NOC] send_unsubscribe_email result for ' . $email . ': ' . ($sent ? 'OK' : 'FAILED'));
+    return $sent;
 }
 
 function all_subscribers(bool $confirmedOnly = true): array

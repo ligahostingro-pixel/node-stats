@@ -57,7 +57,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (csrf_valid($csrfToken) && $postAction === 'unsubscribe_email') {
         $email = (string)($_POST['email'] ?? '');
-        if (send_unsubscribe_email($email)) {
+        try {
+            $unsubOk = send_unsubscribe_email($email);
+        } catch (\Throwable $e) {
+            error_log('[NOC] send_unsubscribe_email exception: ' . $e->getMessage());
+            $unsubOk = false;
+        }
+        if ($unsubOk) {
             $message = 'A confirmation email has been sent. Please check your inbox and click the link to unsubscribe.';
             $messageType = 'success';
         } else {
