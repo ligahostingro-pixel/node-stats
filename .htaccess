@@ -5,28 +5,15 @@
 # Disable directory listing
 Options -Indexes
 
-# ── Block sensitive files directly ───────────────────────────
-<FilesMatch "\.(php|sql|md|lock|gitignore|htaccess)$">
-    <IfModule mod_authz_core.c>
-        Require all denied
-    </IfModule>
-    <IfModule !mod_authz_core.c>
-        Order deny,allow
-        Deny from all
-    </IfModule>
-</FilesMatch>
-
-# ── Block sensitive directories ──────────────────────────────
 RewriteEngine On
 
-# Block direct access to lib/, data/, node-agent/, .git/, bkp/
+# ── Block sensitive directories ──────────────────────────────
 RewriteRule ^(lib|data|node-agent|\.git|bkp)(/|$) - [F,L]
 
-# Block root-level sensitive files
-RewriteRule ^(config\.php|cron\.php|schema_mariadb\.sql|add_node_temp\.php|README\.md)$ - [F,L]
+# ── Block root-level sensitive files ─────────────────────────
+RewriteRule ^(config\.php|cron\.php|schema_mariadb\.sql|add_node_temp\.php|README\.md|\.gitignore)$ - [F,L]
 
 # ── Forward everything else to public/ ───────────────────────
-# If the request is not already inside public/, rewrite into it
 RewriteCond %{REQUEST_URI} !^/public/
 RewriteRule ^(.*)$ public/$1 [L]
 
