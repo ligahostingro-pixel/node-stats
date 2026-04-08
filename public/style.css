@@ -1267,6 +1267,7 @@ textarea {
   cursor: pointer;
   background: rgba(239, 68, 68, 0.12);
   color: #ffb1b1;
+  border-color: rgba(239, 68, 68, 0.2);
 }
 
 .check-row {
@@ -1631,11 +1632,12 @@ textarea {
 /* Node cards in admin */
 .admin-node-list {
   display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
 
 .admin-node-card {
-  padding: 16px;
+  padding: 14px 16px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--panel-2);
@@ -1658,7 +1660,7 @@ textarea {
 }
 
 .anc-name {
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   display: block;
 }
 
@@ -2763,6 +2765,10 @@ canvas {
     grid-template-columns: 1fr;
   }
 
+  .admin-node-list {
+    grid-template-columns: 1fr;
+  }
+
   .admin-tab {
     flex: 1 1 100%;
   }
@@ -2819,16 +2825,16 @@ canvas {
 }
 
 .btn-warning {
-  background: rgba(245, 158, 11, 0.08);
-  color: #ffd491;
+  background: rgba(245, 158, 11, 0.12);
+  color: #ffcb6b;
   cursor: pointer;
   font-family: inherit;
   font-weight: 600;
-  font-size: 0.82rem;
+  border-color: rgba(245, 158, 11, 0.2);
 }
 
 .btn-warning:hover {
-  background: rgba(245, 158, 11, 0.15);
+  background: rgba(245, 158, 11, 0.18);
   border-color: rgba(245, 158, 11, 0.4);
 }
 

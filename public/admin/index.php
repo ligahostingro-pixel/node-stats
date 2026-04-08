@@ -168,7 +168,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($id > 0) {
                 delete_subscriber($id);
             }
-            header('Location: /admin/');
+            $subPg = (int)($_POST['sub_page'] ?? 1);
+            header('Location: /admin/?sub_page=' . $subPg . '#panel-subscribers');
             exit;
         }
 
@@ -216,6 +217,12 @@ $smtpUser = get_state_value('smtp_user', '');
 $smtpPass = get_state_value('smtp_pass', '');
 $smtpEncryption = get_state_value('smtp_encryption', 'none');
 $subscribers = all_subscribers(false);
+$subPage = max(1, (int)($_GET['sub_page'] ?? 1));
+$subPerPage = 20;
+$subTotal = count($subscribers);
+$subTotalPages = max(1, (int)ceil($subTotal / $subPerPage));
+if ($subPage > $subTotalPages) { $subPage = $subTotalPages; }
+$subPaged = array_slice($subscribers, ($subPage - 1) * $subPerPage, $subPerPage);
 $remoteCount = 0;
 foreach ($nodes as $node) {
     if ((string)($node['node_type'] ?? '') === 'remote') {
@@ -895,15 +902,15 @@ foreach ($nodes as $node) {
         <div class="panel-head">
           <div>
             <h2>Email subscribers</h2>
-            <p class="table-meta"><?= e((string)count($subscribers)) ?> subscriber(s). Notifications are sent for announcements and node-down events.</p>
+            <p class="table-meta"><?= e((string)$subTotal) ?> subscriber(s)<?= $subTotalPages > 1 ? ' — page ' . e((string)$subPage) . ' of ' . e((string)$subTotalPages) : '' ?>. Notifications are sent for announcements and node-down events.</p>
           </div>
         </div>
 
-        <?php if (count($subscribers) === 0): ?>
+        <?php if ($subTotal === 0): ?>
           <div class="admin-empty">No subscribers yet. Users can subscribe via the public status page.</div>
         <?php else: ?>
           <div class="admin-subscriber-grid">
-            <?php foreach ($subscribers as $sub): ?>
+            <?php foreach ($subPaged as $sub): ?>
               <div class="admin-sub-card">
                 <div class="asc-info">
                   <strong><?= e((string)$sub['email']) ?></strong>
@@ -916,11 +923,26 @@ foreach ($nodes as $node) {
                   <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                   <input type="hidden" name="action" value="delete_subscriber">
                   <input type="hidden" name="id" value="<?= e((string)$sub['id']) ?>">
+                  <input type="hidden" name="sub_page" value="<?= $subPage ?>">
                   <button class="btn-danger btn-sm" type="submit">Remove</button>
                 </form>
               </div>
             <?php endforeach; ?>
           </div>
+
+          <?php if ($subTotalPages > 1): ?>
+            <nav class="nd-pagination">
+              <?php if ($subPage > 1): ?>
+                <a class="nd-page-link" href="?sub_page=<?= $subPage - 1 ?>#panel-subscribers">← Prev</a>
+              <?php endif; ?>
+              <?php for ($p = 1; $p <= $subTotalPages; $p++): ?>
+                <a class="nd-page-link<?= $p === $subPage ? ' nd-page-active' : '' ?>" href="?sub_page=<?= $p ?>#panel-subscribers"><?= $p ?></a>
+              <?php endfor; ?>
+              <?php if ($subPage < $subTotalPages): ?>
+                <a class="nd-page-link" href="?sub_page=<?= $subPage + 1 ?>#panel-subscribers">Next →</a>
+              <?php endif; ?>
+            </nav>
+          <?php endif; ?>
         <?php endif; ?>
       </article>
     </section>
