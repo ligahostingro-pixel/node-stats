@@ -91,20 +91,7 @@ function ensure_storage(): void
 
     db();
     seed_default_local_node();
-}
-
-function ensure_column(PDO $pdo, string $table, string $column, string $definition): void
-{
-    $stmt = $pdo->query('PRAGMA table_info(' . $table . ')');
-    $columns = $stmt !== false ? $stmt->fetchAll() : [];
-
-    foreach ($columns as $info) {
-        if ((string)($info['name'] ?? '') === $column) {
-            return;
-        }
-    }
-
-    $pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
+    seed_default_admin();
 }
 
 function db(): PDO
@@ -114,129 +101,11 @@ function db(): PDO
         return $pdo;
     }
 
-    $pdo = new PDO('sqlite:' . SQLITE_PATH);
+    $dsn = 'mysql:host=' . DB_HOST . ';port=' . DB_PORT . ';dbname=' . DB_NAME . ';charset=utf8mb4';
+    $pdo = new PDO($dsn, DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-    $pdo->exec('PRAGMA foreign_keys = ON');
-
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS nodes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            node_type TEXT NOT NULL DEFAULT "remote",
-            ssh_host TEXT,
-            ssh_port INTEGER,
-            ssh_user TEXT,
-            ssh_password TEXT,
-            net_interface TEXT,
-            endpoint_url TEXT,
-            api_token TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at INTEGER NOT NULL
-        )'
-    );
-
-    ensure_column($pdo, 'nodes', 'ssh_host', 'TEXT');
-    ensure_column($pdo, 'nodes', 'ssh_port', 'INTEGER');
-    ensure_column($pdo, 'nodes', 'ssh_user', 'TEXT');
-    ensure_column($pdo, 'nodes', 'ssh_password', 'TEXT');
-    ensure_column($pdo, 'nodes', 'net_interface', 'TEXT');
-    ensure_column($pdo, 'nodes', 'country', 'TEXT');
-
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS samples (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id INTEGER NOT NULL,
-            ts INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            cpu_pct REAL,
-            cpu_name TEXT,
-            cpu_cores INTEGER,
-            hostname TEXT,
-            os_name TEXT,
-            mem_total_mb REAL,
-            mem_used_mb REAL,
-            mem_used_pct REAL,
-            swap_total_mb REAL,
-            swap_used_mb REAL,
-            swap_used_pct REAL,
-            disk_total_gb REAL,
-            disk_used_gb REAL,
-            disk_used_pct REAL,
-            net_rx_bytes INTEGER,
-            net_tx_bytes INTEGER,
-            load1 REAL,
-            load5 REAL,
-            load15 REAL,
-            error_text TEXT,
-            FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
-        )'
-    );
-
-    ensure_column($pdo, 'samples', 'cpu_name', 'TEXT');
-    ensure_column($pdo, 'samples', 'cpu_cores', 'INTEGER');
-    ensure_column($pdo, 'samples', 'hostname', 'TEXT');
-    ensure_column($pdo, 'samples', 'os_name', 'TEXT');
-    ensure_column($pdo, 'samples', 'mem_total_mb', 'REAL');
-    ensure_column($pdo, 'samples', 'swap_total_mb', 'REAL');
-    ensure_column($pdo, 'samples', 'swap_used_mb', 'REAL');
-    ensure_column($pdo, 'samples', 'swap_used_pct', 'REAL');
-    ensure_column($pdo, 'samples', 'disk_total_gb', 'REAL');
-    ensure_column($pdo, 'samples', 'disk_used_gb', 'REAL');
-    ensure_column($pdo, 'samples', 'disk_used_pct', 'REAL');
-    ensure_column($pdo, 'samples', 'uptime_seconds', 'INTEGER');
-
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_samples_node_ts ON samples(node_id, ts)');
-
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS announcements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            message TEXT NOT NULL,
-            level TEXT NOT NULL DEFAULT "info",
-            node_id INTEGER,
-            starts_at INTEGER,
-            ends_at INTEGER,
-            pinned INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            created_by TEXT NOT NULL
-        )'
-    );
-
-    ensure_column($pdo, 'announcements', 'level', 'TEXT NOT NULL DEFAULT "info"');
-    ensure_column($pdo, 'announcements', 'node_id', 'INTEGER');
-    ensure_column($pdo, 'announcements', 'starts_at', 'INTEGER');
-    ensure_column($pdo, 'announcements', 'ends_at', 'INTEGER');
-    ensure_column($pdo, 'announcements', 'resolved_at', 'INTEGER');
-
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS app_state (
-            state_key TEXT PRIMARY KEY,
-            state_value TEXT NOT NULL
-        )'
-    );
-
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS subscribers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL UNIQUE,
-            token TEXT NOT NULL,
-            confirmed INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
-        )'
-    );
-
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS announcement_updates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            announcement_id INTEGER NOT NULL,
-            message TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT "investigating",
-            created_at INTEGER NOT NULL,
-            created_by TEXT NOT NULL,
-            FOREIGN KEY (announcement_id) REFERENCES announcements(id) ON DELETE CASCADE
-        )'
-    );
+    $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
 
     return $pdo;
 }
@@ -266,6 +135,25 @@ function seed_default_local_node(): void
     }
 }
 
+function seed_default_admin(): void
+{
+    $pdo = db();
+    $stmt = $pdo->query('SELECT COUNT(*) AS c FROM admins');
+    $count = (int)($stmt->fetch()['c'] ?? 0);
+
+    if ($count === 0) {
+        $insert = $pdo->prepare(
+            'INSERT INTO admins (username, password, created_at)
+             VALUES (:username, :password, :created_at)'
+        );
+        $insert->execute([
+            ':username' => ADMIN_DEFAULT_USER,
+            ':password' => password_hash(ADMIN_DEFAULT_PASS, PASSWORD_BCRYPT),
+            ':created_at' => time(),
+        ]);
+    }
+}
+
 function get_state_value(string $key, string $default = ''): string
 {
     $stmt = db()->prepare('SELECT state_value FROM app_state WHERE state_key = :key');
@@ -280,7 +168,7 @@ function set_state_value(string $key, string $value): void
     $stmt = db()->prepare(
         'INSERT INTO app_state (state_key, state_value)
          VALUES (:key, :value)
-         ON CONFLICT(state_key) DO UPDATE SET state_value = excluded.state_value'
+         ON DUPLICATE KEY UPDATE state_value = VALUES(state_value)'
     );
 
     $stmt->execute([
@@ -1431,11 +1319,11 @@ function node_uptime_percent(int $nodeId, int $days = 30): ?float
     }
 
     $stmt = db()->prepare(
-        'SELECT
+        "SELECT
             COUNT(*) AS total_count,
-            SUM(CASE WHEN status = "up" THEN 1 ELSE 0 END) AS up_count
+            SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count
          FROM samples
-         WHERE node_id = :node_id AND ts >= :start_ts'
+         WHERE node_id = :node_id AND ts >= :start_ts"
     );
 
     $stmt->execute([
@@ -1457,7 +1345,7 @@ function node_uptime_percent(int $nodeId, int $days = 30): ?float
 function list_available_days(int $limit = 30): array
 {
     $stmt = db()->prepare(
-        'SELECT DISTINCT date(ts, "unixepoch", "localtime") AS day
+        'SELECT DISTINCT DATE(FROM_UNIXTIME(ts)) AS day
          FROM samples
          ORDER BY day DESC
          LIMIT :lim'
@@ -1518,24 +1406,38 @@ function login_admin(string $username, string $password): bool
         return false;
     }
 
-    $validUser = hash_equals(ADMIN_USERNAME, trim($username));
-    $validPass = hash_equals(ADMIN_PASSWORD, $password);
-
-    if (!$validUser || !$validPass) {
+    $username = trim($username);
+    if ($username === '' || $password === '') {
         record_login_failure();
         return false;
+    }
+
+    $stmt = db()->prepare('SELECT id, username, password FROM admins WHERE username = :u LIMIT 1');
+    $stmt->execute([':u' => $username]);
+    $admin = $stmt->fetch();
+
+    if (!is_array($admin) || !password_verify($password, (string)$admin['password'])) {
+        record_login_failure();
+        return false;
+    }
+
+    // Rehash if cost/algo changed
+    if (password_needs_rehash((string)$admin['password'], PASSWORD_BCRYPT)) {
+        $upd = db()->prepare('UPDATE admins SET password = :p WHERE id = :id');
+        $upd->execute([':p' => password_hash($password, PASSWORD_BCRYPT), ':id' => $admin['id']]);
     }
 
     clear_login_failures();
     session_regenerate_id(true);
     $_SESSION['is_admin'] = true;
-    $_SESSION['admin_user'] = ADMIN_USERNAME;
+    $_SESSION['admin_user'] = (string)$admin['username'];
+    $_SESSION['admin_id'] = (int)$admin['id'];
     return true;
 }
 
 function logout_admin(): void
 {
-    unset($_SESSION['is_admin'], $_SESSION['admin_user']);
+    unset($_SESSION['is_admin'], $_SESSION['admin_user'], $_SESSION['admin_id']);
 }
 
 function is_admin(): bool
@@ -1546,6 +1448,25 @@ function is_admin(): bool
 function admin_user(): string
 {
     return (string)($_SESSION['admin_user'] ?? 'admin');
+}
+
+function change_admin_password(string $currentPassword, string $newPassword): bool
+{
+    $adminId = (int)($_SESSION['admin_id'] ?? 0);
+    if ($adminId <= 0) {
+        return false;
+    }
+
+    $stmt = db()->prepare('SELECT password FROM admins WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $adminId]);
+    $row = $stmt->fetch();
+    if (!is_array($row) || !password_verify($currentPassword, (string)$row['password'])) {
+        return false;
+    }
+
+    $upd = db()->prepare('UPDATE admins SET password = :p WHERE id = :id');
+    $upd->execute([':p' => password_hash($newPassword, PASSWORD_BCRYPT), ':id' => $adminId]);
+    return true;
 }
 
 function e(string $value): string

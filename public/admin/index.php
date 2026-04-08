@@ -25,6 +25,8 @@ $parseDateTime = static function (?string $value): ?int {
 };
 
 $loginFailed = false;
+$passwordChanged = false;
+$passwordError = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = (string)($_POST['csrf_token'] ?? '');
@@ -141,6 +143,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             header('Location: /admin/');
             exit;
+        }
+
+        if (is_admin() && $action === 'change_password') {
+            $currentPass = (string)($_POST['current_password'] ?? '');
+            $newPass = (string)($_POST['new_password'] ?? '');
+            $confirmPass = (string)($_POST['confirm_password'] ?? '');
+
+            if ($newPass !== '' && $newPass === $confirmPass && strlen($newPass) >= 6) {
+                $passwordChanged = change_admin_password($currentPass, $newPass);
+                $passwordError = $passwordChanged ? '' : 'Current password is incorrect.';
+            } else {
+                $passwordChanged = false;
+                $passwordError = $newPass !== $confirmPass
+                    ? 'New passwords do not match.'
+                    : 'Password must be at least 6 characters.';
+            }
         }
     }
 }
@@ -284,6 +302,10 @@ foreach ($nodes as $node) {
         <button class="admin-tab" type="button" data-panel="subscribers">
           <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
           Subscribers
+        </button>
+        <button class="admin-tab" type="button" data-panel="security">
+          <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+          Security
         </button>
       </nav>
     </section>
@@ -797,6 +819,43 @@ foreach ($nodes as $node) {
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
+      </article>
+    </section>
+
+    <!-- === SECURITY PANEL === -->
+    <section class="admin-panel-page" id="panel-security">
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Change password</h2>
+        </div>
+
+        <?php if ($passwordChanged): ?>
+          <div class="alert alert-success" style="margin:0 16px 16px;">Password changed successfully.</div>
+        <?php elseif ($passwordError !== ''): ?>
+          <div class="alert alert-danger" style="margin:0 16px 16px;"><?= e($passwordError) ?></div>
+        <?php endif; ?>
+
+        <form method="post" class="admin-form" style="padding:16px;">
+          <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+          <input type="hidden" name="action" value="change_password">
+
+          <div class="form-group">
+            <label for="current_password">Current password</label>
+            <input type="password" id="current_password" name="current_password" required autocomplete="current-password">
+          </div>
+
+          <div class="form-group">
+            <label for="new_password">New password</label>
+            <input type="password" id="new_password" name="new_password" required minlength="6" autocomplete="new-password">
+          </div>
+
+          <div class="form-group">
+            <label for="confirm_password">Confirm new password</label>
+            <input type="password" id="confirm_password" name="confirm_password" required minlength="6" autocomplete="new-password">
+          </div>
+
+          <button type="submit" class="btn-primary">Update password</button>
+        </form>
       </article>
     </section>
 
