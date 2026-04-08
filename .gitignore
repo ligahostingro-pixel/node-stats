@@ -1,3 +1,4 @@
-data/samples/*.jsonl
-data/state.json
 data/collector.lock
+data/status.sqlite
+data/status.sqlite-shm
+data/status.sqlite-wal
