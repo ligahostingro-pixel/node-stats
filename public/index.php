@@ -56,6 +56,8 @@ if (!in_array($sort, $allowedSort, true)) {
 if (!in_array($announcementFilter, ['all', 'active', 'upcoming', 'resolved'], true)) {
   $announcementFilter = 'active';
 }
+$annPgNum = max(1, (int)($_GET['ann_pg'] ?? 1));
+$annPgSize = 5;
 
 $now = time();
 $levelRank = [
@@ -158,6 +160,11 @@ usort($announcementRows, static function (array $a, array $b) use ($levelRank): 
 
   return ((int)($b['created_at'] ?? 0)) <=> ((int)($a['created_at'] ?? 0));
 });
+
+$annTotalFiltered = count($announcementRows);
+$annTotalPg = max(1, (int)ceil($annTotalFiltered / $annPgSize));
+if ($annPgNum > $annTotalPg) { $annPgNum = $annTotalPg; }
+$announcementRowsPaged = array_slice($announcementRows, ($annPgNum - 1) * $annPgSize, $annPgSize);
 
 $statusRank = [
     'down' => 0,
@@ -841,11 +848,11 @@ foreach ($nodesByCountry as $cc => $info) {
         </div>
 
         <div class="announce-list">
-          <?php if (count($announcementRows) === 0): ?>
+          <?php if (count($announcementRowsPaged) === 0): ?>
             <p class="empty-state">No announcements match the selected filter.</p>
           <?php endif; ?>
 
-          <?php foreach ($announcementRows as $item): ?>
+          <?php foreach ($announcementRowsPaged as $item): ?>
             <?php
             $level = is_string($item['level'] ?? null) ? (string)$item['level'] : 'info';
             $targetNode = is_string($item['node_name'] ?? null) && trim((string)$item['node_name']) !== '' ? (string)$item['node_name'] : 'All nodes';
@@ -903,6 +910,29 @@ foreach ($nodesByCountry as $cc => $info) {
               <?php endif; ?>
             </article>
           <?php endforeach; ?>
+
+          <?php if ($annTotalPg > 1):
+            $annPgUrl = static function (int $pg) use ($announcementFilter, $statusFilter, $typeFilter, $sort, $search): string {
+              $params = ['ann' => $announcementFilter, 'ann_pg' => $pg];
+              if ($statusFilter !== 'all') { $params['status'] = $statusFilter; }
+              if ($typeFilter !== 'all') { $params['type'] = $typeFilter; }
+              if ($sort !== 'uptime_desc') { $params['sort'] = $sort; }
+              if ($search !== '') { $params['q'] = $search; }
+              return '/?' . http_build_query($params) . '#announcements';
+            };
+          ?>
+            <nav class="nd-pagination">
+              <?php if ($annPgNum > 1): ?>
+                <a class="nd-page-link" href="<?= e($annPgUrl($annPgNum - 1)) ?>">← Prev</a>
+              <?php endif; ?>
+              <?php for ($p = 1; $p <= $annTotalPg; $p++): ?>
+                <a class="nd-page-link<?= $p === $annPgNum ? ' nd-page-active' : '' ?>" href="<?= e($annPgUrl($p)) ?>"><?= $p ?></a>
+              <?php endfor; ?>
+              <?php if ($annPgNum < $annTotalPg): ?>
+                <a class="nd-page-link" href="<?= e($annPgUrl($annPgNum + 1)) ?>">Next →</a>
+              <?php endif; ?>
+            </nav>
+          <?php endif; ?>
         </div>
       </article>
     </section>

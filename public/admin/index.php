@@ -191,6 +191,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $nodes = all_nodes(false);
 $announcements = load_announcements();
 $allUpdates = load_all_announcement_updates();
+$annPage = max(1, (int)($_GET['ann_page'] ?? 1));
+$annPerPage = 10;
+$annTotal = count($announcements);
+$annTotalPages = max(1, (int)ceil($annTotal / $annPerPage));
+if ($annPage > $annTotalPages) { $annPage = $annTotalPages; }
+$annOffset = ($annPage - 1) * $annPerPage;
+$annPaged = array_slice($announcements, $annOffset, $annPerPage);
 $networkAsn = get_state_value('network_asn', 'AS201131');
 $networkOrg = get_state_value('network_org', 'LIGA HOSTING LTD');
 $networkPrefixes = get_state_value('network_prefixes', "2.27.119.0/24\n5.180.33.0/24\n87.76.205.0/24\n163.5.26.0/24");
@@ -610,16 +617,16 @@ foreach ($nodes as $node) {
           <div class="panel-head">
             <div>
               <h2>Existing announcements</h2>
-              <p class="table-meta"><?= e((string)count($announcements)) ?> announcement(s)</p>
+              <p class="table-meta"><?= e((string)$annTotal) ?> announcement(s)<?= $annTotalPages > 1 ? ' — page ' . e((string)$annPage) . ' of ' . e((string)$annTotalPages) : '' ?></p>
             </div>
           </div>
 
           <div class="announce-list">
-            <?php if (count($announcements) === 0): ?>
+            <?php if ($annTotal === 0): ?>
               <div class="admin-empty">No announcements yet.</div>
             <?php endif; ?>
 
-            <?php foreach ($announcements as $item): ?>
+            <?php foreach ($annPaged as $item): ?>
               <?php
               $level = is_string($item['level'] ?? null) ? (string)$item['level'] : 'info';
               $targetNode = is_string($item['node_name'] ?? null) && trim((string)$item['node_name']) !== '' ? (string)$item['node_name'] : 'All nodes';
@@ -692,6 +699,20 @@ foreach ($nodes as $node) {
               </article>
             <?php endforeach; ?>
           </div>
+
+          <?php if ($annTotalPages > 1): ?>
+            <nav class="nd-pagination">
+              <?php if ($annPage > 1): ?>
+                <a class="nd-page-link" href="?ann_page=<?= $annPage - 1 ?>#panel-announcements">← Prev</a>
+              <?php endif; ?>
+              <?php for ($p = 1; $p <= $annTotalPages; $p++): ?>
+                <a class="nd-page-link<?= $p === $annPage ? ' nd-page-active' : '' ?>" href="?ann_page=<?= $p ?>#panel-announcements"><?= $p ?></a>
+              <?php endfor; ?>
+              <?php if ($annPage < $annTotalPages): ?>
+                <a class="nd-page-link" href="?ann_page=<?= $annPage + 1 ?>#panel-announcements">Next →</a>
+              <?php endif; ?>
+            </nav>
+          <?php endif; ?>
         </article>
       </div>
     </section>

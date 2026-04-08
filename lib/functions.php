@@ -1855,14 +1855,16 @@ function subscribe_email(string $email): array
         return ['ok' => false, 'error' => 'Invalid email address.'];
     }
 
-    $stmt = db()->prepare('SELECT id, confirmed FROM subscribers WHERE email = :email LIMIT 1');
+    $stmt = db()->prepare('SELECT id, confirmed, token FROM subscribers WHERE email = :email LIMIT 1');
     $stmt->execute([':email' => $email]);
     $existing = $stmt->fetch();
     if (is_array($existing)) {
         if ((int)($existing['confirmed'] ?? 0) === 1) {
             return ['ok' => false, 'error' => 'This email is already subscribed.'];
         }
-        return ['ok' => true, 'message' => 'Confirmation email already sent. Please check your inbox.', 'resend' => true, 'id' => (int)$existing['id']];
+        // Resend confirmation email
+        send_confirmation_email($email, (string)$existing['token']);
+        return ['ok' => true, 'message' => 'Confirmation email sent. Please check your inbox (and spam folder).', 'resend' => true, 'id' => (int)$existing['id']];
     }
 
     $token = bin2hex(random_bytes(24));
@@ -1876,7 +1878,41 @@ function subscribe_email(string $email): array
         ':created_at' => time(),
     ]);
 
-    return ['ok' => true, 'message' => 'Subscribed! You will receive email notifications.', 'token' => $token, 'id' => (int)db()->lastInsertId()];
+    send_confirmation_email($email, $token);
+
+    return ['ok' => true, 'message' => 'Confirmation email sent! Please check your inbox (and spam folder) to confirm your subscription.', 'token' => $token, 'id' => (int)db()->lastInsertId()];
+}
+
+function send_confirmation_email(string $email, string $token): void
+{
+    $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $fromName = $networkOrg . ' NOC';
+    $fromEmail = trim(get_state_value('notify_from_email', ''));
+    if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+        return;
+    }
+
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+    if ($baseUrl === '') {
+        return;
+    }
+
+    $confirmLink = $baseUrl . '/subscribe?action=confirm&token=' . rawurlencode($token);
+
+    $subject = '[' . $networkAsn . '] Confirm your subscription';
+
+    $bodyHtml = '<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">'
+        . '<div style="background:#4EA8FF;color:#fff;padding:12px 20px;border-radius:8px 8px 0 0;font-weight:700;">Confirm Subscription</div>'
+        . '<div style="background:#111827;color:#e5eefb;padding:20px;border:1px solid #1e293b;border-radius:0 0 8px 8px;">'
+        . '<h2 style="margin:0 0 12px;">Confirm your email</h2>'
+        . '<p style="margin:0 0 16px;line-height:1.6;">You requested to receive status notifications from <strong>' . htmlspecialchars($networkOrg, ENT_QUOTES, 'UTF-8') . '</strong>.</p>'
+        . '<p style="margin:0 0 16px;"><a href="' . htmlspecialchars($confirmLink, ENT_QUOTES, 'UTF-8') . '" style="display:inline-block;background:#4EA8FF;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700;">Confirm subscription</a></p>'
+        . '<p style="margin:0;font-size:12px;color:#64748b;">If you did not request this, you can ignore this email.</p>'
+        . '<p style="margin:16px 0 0;font-size:12px;color:#64748b;">' . htmlspecialchars($networkAsn . ' • ' . $networkOrg, ENT_QUOTES, 'UTF-8') . '</p>'
+        . '</div></div>';
+
+    smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
 }
 
 function confirm_subscriber(string $token): bool
@@ -1942,6 +1978,8 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
     }
 
     $prefix = $smtpEncryption === 'ssl' ? 'ssl://' : '';
+    // Auto-upgrade to STARTTLS on port 587 when encryption is not explicitly set
+    $useStartTls = $smtpEncryption === 'tls' || ($smtpEncryption === 'none' && $smtpPort === 587);
     $timeout = 10;
     $errno = 0;
     $errstr = '';
@@ -1954,6 +1992,7 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
     );
 
     if ($socket === false) {
+        error_log('[SMTP] Connection failed to ' . $smtpHost . ':' . $smtpPort . ' — ' . $errstr . ' (errno=' . $errno . ')');
         return false;
     }
 
@@ -1981,6 +2020,7 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
 
     $greeting = $read();
     if (!$ok($greeting)) {
+        error_log('[SMTP] Bad greeting from ' . $smtpHost . ': ' . trim($greeting));
         fclose($socket);
         return false;
     }
@@ -1991,14 +2031,16 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
         $send('HELO ' . $ehloHost);
     }
 
-    if ($smtpEncryption === 'tls') {
+    if ($useStartTls) {
         $tlsResp = $send('STARTTLS');
         if (!$ok($tlsResp)) {
+            error_log('[SMTP] STARTTLS rejected by ' . $smtpHost . ': ' . trim($tlsResp));
             fclose($socket);
             return false;
         }
         $crypto = stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT);
         if ($crypto !== true) {
+            error_log('[SMTP] TLS handshake failed with ' . $smtpHost);
             fclose($socket);
             return false;
         }
@@ -2008,16 +2050,19 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
     if ($smtpUser !== '' && $smtpPass !== '') {
         $authResp = $send('AUTH LOGIN');
         if (!$ok($authResp, '3')) {
+            error_log('[SMTP] AUTH LOGIN rejected by ' . $smtpHost . ': ' . trim($authResp));
             fclose($socket);
             return false;
         }
         $userResp = $send(base64_encode($smtpUser));
         if (!$ok($userResp, '3')) {
+            error_log('[SMTP] AUTH user rejected by ' . $smtpHost . ': ' . trim($userResp));
             fclose($socket);
             return false;
         }
         $passResp = $send(base64_encode($smtpPass));
         if (!$ok($passResp)) {
+            error_log('[SMTP] AUTH password rejected by ' . $smtpHost . ': ' . trim($passResp));
             fclose($socket);
             return false;
         }
@@ -2025,18 +2070,21 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
 
     $fromResp = $send('MAIL FROM:<' . preg_replace('/[\r\n]/', '', $fromEmail) . '>');
     if (!$ok($fromResp)) {
+        error_log('[SMTP] MAIL FROM rejected: ' . trim($fromResp));
         fclose($socket);
         return false;
     }
 
     $rcptResp = $send('RCPT TO:<' . preg_replace('/[\r\n]/', '', $to) . '>');
     if (!$ok($rcptResp)) {
+        error_log('[SMTP] RCPT TO <' . $to . '> rejected: ' . trim($rcptResp));
         fclose($socket);
         return false;
     }
 
     $dataResp = $send('DATA');
     if (!$ok($dataResp, '3')) {
+        error_log('[SMTP] DATA rejected: ' . trim($dataResp));
         fclose($socket);
         return false;
     }
@@ -2156,7 +2204,7 @@ function dispatch_discord_node_down(string $nodeName, int $nodeId): void
         'embeds' => [
             [
                 'title' => "\xF0\x9F\x9A\xA8 NODE DOWN — " . $nodeName,
-                'description' => "**" . $nodeName . "** is not responding.\nAutomatic incident created. The NOC team has been alerted.",
+                'description' => "**" . $nodeName . "** is not responding.\nAutomatic incident created. The NOC team has been alerted.\n\n[Status page](https://as201131.net) • [Subscribe to alerts](https://as201131.net/subscribe)",
                 'color' => 0xEF4444,
                 'fields' => [
                     ['name' => 'Status', 'value' => '`CRITICAL`', 'inline' => true],
@@ -2190,7 +2238,7 @@ function dispatch_discord_node_recovered(string $nodeName, int $nodeId): void
         'embeds' => [
             [
                 'title' => "\xE2\x9C\x85 NODE RECOVERED — " . $nodeName,
-                'description' => "**" . $nodeName . "** is back online.\nAutomatic incident resolved.",
+                'description' => "**" . $nodeName . "** is back online.\nAutomatic incident resolved.\n\n[Status page](https://as201131.net) • [Subscribe to alerts](https://as201131.net/subscribe)",
                 'color' => 0x22C55E,
                 'fields' => [
                     ['name' => 'Status', 'value' => '`RESOLVED`', 'inline' => true],

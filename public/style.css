@@ -103,7 +103,8 @@ textarea {
 .view-link,
 .btn-primary,
 .btn-secondary,
-.btn-danger {
+.btn-danger,
+.btn-warning {
   border: 1px solid var(--line);
   border-radius: 12px;
   text-decoration: none;
@@ -193,7 +194,8 @@ textarea {
 .view-link:hover,
 .btn-primary:hover,
 .btn-secondary:hover,
-.btn-danger:hover {
+.btn-danger:hover,
+.btn-warning:hover {
   transform: translateY(-1px);
   border-color: rgba(78, 168, 255, 0.4);
 }
@@ -648,7 +650,8 @@ textarea {
 .view-link,
 .btn-primary,
 .btn-secondary,
-.btn-danger {
+.btn-danger,
+.btn-warning {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2816,23 +2819,17 @@ canvas {
 }
 
 .btn-warning {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  text-decoration: none;
-  transition: 160ms ease;
   background: rgba(245, 158, 11, 0.08);
   color: #ffd491;
   cursor: pointer;
   font-family: inherit;
   font-weight: 600;
-  padding: 9px 16px;
   font-size: 0.82rem;
 }
 
 .btn-warning:hover {
   background: rgba(245, 158, 11, 0.15);
   border-color: rgba(245, 158, 11, 0.4);
-  transform: translateY(-1px);
 }
 
 /* Node test result */
