@@ -1,12 +1,12 @@
-# ─── Node Status — Root protection ───────────────────────────
-# This file protects sensitive directories if someone accidentally
-# sets DocumentRoot to the project root instead of public/.
-#
-# CORRECT setup:  DocumentRoot /var/www/node-stats/public
-# This is a safety net only.
+# ─── Node Status — LiteSpeed / Apache root .htaccess ─────────
+# Routes ALL requests into public/ subfolder automatically.
+# Works with LiteSpeed, Apache 2.2+, OpenLiteSpeed.
 
-# Block access to config, lib, data, schema
-<FilesMatch "^(config\.php|schema_mariadb\.sql|cron\.php)$">
+# Disable directory listing
+Options -Indexes
+
+# ── Block sensitive files directly ───────────────────────────
+<FilesMatch "\.(php|sql|md|lock|gitignore|htaccess)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -16,5 +16,17 @@
     </IfModule>
 </FilesMatch>
 
-# Block access to sensitive directories
-RedirectMatch 403 ^/(lib|data|node-agent|\.git)/
+# ── Block sensitive directories ──────────────────────────────
+RewriteEngine On
+
+# Block direct access to lib/, data/, node-agent/, .git/, bkp/
+RewriteRule ^(lib|data|node-agent|\.git|bkp)(/|$) - [F,L]
+
+# Block root-level sensitive files
+RewriteRule ^(config\.php|cron\.php|schema_mariadb\.sql|add_node_temp\.php|README\.md)$ - [F,L]
+
+# ── Forward everything else to public/ ───────────────────────
+# If the request is not already inside public/, rewrite into it
+RewriteCond %{REQUEST_URI} !^/public/
+RewriteRule ^(.*)$ public/$1 [L]
+
