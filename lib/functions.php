@@ -499,7 +499,7 @@ function dispatch_discord_webhook(
     }
 
     $colorMap = [
-        'info' => 0x32D4C8,
+        'info' => 0x4EA8FF,
         'maintenance' => 0xF59E0B,
         'degraded' => 0xF59E0B,
         'critical' => 0xEF4444,
@@ -513,7 +513,7 @@ function dispatch_discord_webhook(
     ];
 
     $color = $colorMap[$level] ?? 0x4EA8FF;
-    $icon = $iconMap[$level] ?? '';
+    $icon = $iconMap[$level] ?? "\xE2\x84\xB9\xEF\xB8\x8F";
 
     $nodeName = 'All nodes';
     if ($nodeId !== null && $nodeId > 0) {
@@ -525,48 +525,40 @@ function dispatch_discord_webhook(
         }
     }
 
-    $fields = [
-        [
-            'name' => 'Severity',
-            'value' => '`' . strtoupper($level) . '`',
-            'inline' => true,
-        ],
-        [
-            'name' => 'Affected',
-            'value' => $nodeName,
-            'inline' => true,
-        ],
-    ];
-
-    if ($startsAt !== null || $endsAt !== null) {
-        $window = ($startsAt !== null ? date('Y-m-d H:i', $startsAt) : 'ASAP')
-            . ' → '
-            . ($endsAt !== null ? date('Y-m-d H:i', $endsAt) : 'Until resolved');
-        $fields[] = [
-            'name' => 'Maintenance window',
-            'value' => $window,
-            'inline' => false,
-        ];
-    }
-
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+
+    $desc = (strlen($message) > 800 ? substr($message, 0, 797) . '...' : $message)
+        . "\n"
+        . "\n\xF0\x9F\x94\xB9 **Severity:** `" . strtoupper($level) . "`"
+        . "\n\xF0\x9F\x96\xA5\xEF\xB8\x8F **Affected:** " . $nodeName;
+
+    if ($startsAt !== null || $endsAt !== null) {
+        $windowStart = $startsAt !== null ? '<t:' . $startsAt . ':f>' : 'ASAP';
+        $windowEnd = $endsAt !== null ? '<t:' . $endsAt . ':f>' : 'Until resolved';
+        $desc .= "\n\xF0\x9F\x93\x85 **Window:** " . $windowStart . ' → ' . $windowEnd;
+    }
 
     $payload = [
         'username' => $networkOrg . ' NOC',
         'embeds' => [
             [
                 'title' => $icon . ' ' . $title,
-                'description' => strlen($message) > 1024 ? substr($message, 0, 1021) . '...' : $message,
+                'description' => $desc,
                 'color' => $color,
-                'fields' => $fields,
-                'footer' => [
-                    'text' => $networkAsn . ' • ' . $networkOrg . ' Status',
-                ],
+                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg],
                 'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
             ],
         ],
     ];
+
+    if ($baseUrl !== '') {
+        $payload['embeds'][0]['fields'] = [
+            ['name' => "\xF0\x9F\x94\x97 Links", 'value' => "\xF0\x9F\x93\x8A [Status Page](" . $baseUrl . ")  \xE2\x80\xA2  \xF0\x9F\x94\x94 [Subscribe](" . $baseUrl . "/subscribe)", 'inline' => false],
+        ];
+        $payload['embeds'][0]['url'] = $baseUrl;
+    }
 
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($json === false) {
@@ -2349,23 +2341,32 @@ function dispatch_discord_node_down(string $nodeName, int $nodeId): void
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
     $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
 
+    $desc = "\xE2\x9D\x8C **" . $nodeName . "** is not responding to health checks.\n"
+        . "An automatic incident has been created.\n"
+        . "\n"
+        . "\xF0\x9F\x94\xB9 **Severity:** `CRITICAL`\n"
+        . "\xF0\x9F\x96\xA5\xEF\xB8\x8F **Node:** " . $nodeName . "\n"
+        . "\xF0\x9F\x95\x90 **Detected:** <t:" . time() . ":f> (<t:" . time() . ":R>)";
+
     $payload = [
         'username' => $networkOrg . ' NOC',
         'embeds' => [
             [
-                'title' => "\xF0\x9F\x9A\xA8 NODE DOWN — " . $nodeName,
-                'description' => "**" . $nodeName . "** is not responding.\nAutomatic incident created. The NOC team has been alerted." . ($baseUrl !== '' ? "\n\n[Status page](" . $baseUrl . ") • [Subscribe to alerts](" . $baseUrl . "/subscribe)" : ''),
+                'title' => "\xF0\x9F\x9A\xA8 Node Outage — " . $nodeName,
+                'description' => $desc,
                 'color' => 0xEF4444,
-                'fields' => [
-                    ['name' => 'Status', 'value' => '`CRITICAL`', 'inline' => true],
-                    ['name' => 'Affected', 'value' => $nodeName, 'inline' => true],
-                    ['name' => 'Detected', 'value' => '<t:' . time() . ':R>', 'inline' => true],
-                ],
-                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg . ' Status'],
+                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg],
                 'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
             ],
         ],
     ];
+
+    if ($baseUrl !== '') {
+        $payload['embeds'][0]['fields'] = [
+            ['name' => "\xF0\x9F\x94\x97 Links", 'value' => "\xF0\x9F\x93\x8A [Status Page](" . $baseUrl . ")  \xE2\x80\xA2  \xF0\x9F\x94\x94 [Subscribe](" . $baseUrl . "/subscribe)", 'inline' => false],
+        ];
+        $payload['embeds'][0]['url'] = $baseUrl;
+    }
 
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($json !== false) {
@@ -2384,23 +2385,32 @@ function dispatch_discord_node_recovered(string $nodeName, int $nodeId): void
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
     $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
 
+    $desc = "\xE2\x9C\x85 **" . $nodeName . "** is back online and responding normally.\n"
+        . "The automatic incident has been resolved.\n"
+        . "\n"
+        . "\xF0\x9F\x94\xB9 **Status:** `RESOLVED`\n"
+        . "\xF0\x9F\x96\xA5\xEF\xB8\x8F **Node:** " . $nodeName . "\n"
+        . "\xF0\x9F\x95\x90 **Recovered:** <t:" . time() . ":f> (<t:" . time() . ":R>)";
+
     $payload = [
         'username' => $networkOrg . ' NOC',
         'embeds' => [
             [
-                'title' => "\xE2\x9C\x85 NODE RECOVERED — " . $nodeName,
-                'description' => "**" . $nodeName . "** is back online.\nAutomatic incident resolved." . ($baseUrl !== '' ? "\n\n[Status page](" . $baseUrl . ") • [Subscribe to alerts](" . $baseUrl . "/subscribe)" : ''),
+                'title' => "\xE2\x9C\x85 Node Recovered — " . $nodeName,
+                'description' => $desc,
                 'color' => 0x22C55E,
-                'fields' => [
-                    ['name' => 'Status', 'value' => '`RESOLVED`', 'inline' => true],
-                    ['name' => 'Affected', 'value' => $nodeName, 'inline' => true],
-                    ['name' => 'Recovered', 'value' => '<t:' . time() . ':R>', 'inline' => true],
-                ],
-                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg . ' Status'],
+                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg],
                 'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
             ],
         ],
     ];
+
+    if ($baseUrl !== '') {
+        $payload['embeds'][0]['fields'] = [
+            ['name' => "\xF0\x9F\x94\x97 Links", 'value' => "\xF0\x9F\x93\x8A [Status Page](" . $baseUrl . ")  \xE2\x80\xA2  \xF0\x9F\x94\x94 [Subscribe](" . $baseUrl . "/subscribe)", 'inline' => false],
+        ];
+        $payload['embeds'][0]['url'] = $baseUrl;
+    }
 
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($json !== false) {
