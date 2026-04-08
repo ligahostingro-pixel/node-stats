@@ -2,6 +2,8 @@ User-agent: *
 Allow: /
 Disallow: /admin/
 Disallow: /collect.php
+Disallow: /collect
 Disallow: /node-agent.php
+Disallow: /node-agent
 
 Sitemap: /sitemap.xml

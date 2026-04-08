@@ -169,9 +169,10 @@ $statusRank = [
 
 $nodeRows = [];
 $overallStatus = 'up';
+$latestSamplesMap = all_latest_samples();
 foreach ($nodes as $node) {
     $nodeId = (int)$node['id'];
-    $latest = latest_sample_for_node($nodeId);
+    $latest = $latestSamplesMap[$nodeId] ?? null;
     $liveStatus = node_live_status($latest);
     $uptime = node_uptime_percent($nodeId, 7);
     $days = [];
@@ -348,7 +349,7 @@ foreach ($nodesByCountry as $cc => $info) {
             </a>
           </div>
         </div>
-        <a class="nav-link" href="https://discord.gg/" target="_blank" rel="noopener noreferrer">
+        <a class="nav-link" href="https://discord.gg/liga" target="_blank" rel="noopener noreferrer">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.93-1.52.07.07 0 0 0-.07.03c-.21.37-.44.86-.61 1.24a18.37 18.37 0 0 0-5.43 0c-.17-.39-.41-.87-.62-1.24a.08.08 0 0 0-.07-.03c-1.7.3-3.35.82-4.93 1.52a.07.07 0 0 0-.03.03C.53 9.12-.33 13.72.09 18.27a.08.08 0 0 0 .03.05 19.9 19.9 0 0 0 6.04 3.06.08.08 0 0 0 .08-.03c.47-.64.9-1.32 1.27-2.03a.08.08 0 0 0-.04-.11 13 13 0 0 1-1.9-.91.08.08 0 0 1-.01-.13c.13-.1.26-.21.39-.32a.08.08 0 0 1 .08-.01c3.98 1.82 8.3 1.82 12.23 0a.08.08 0 0 1 .09.01c.13.11.26.22.39.32a.08.08 0 0 1-.01.13c-.6.35-1.24.65-1.9.91a.08.08 0 0 0-.04.11c.38.71.8 1.39 1.27 2.03a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6.05-3.06.08.08 0 0 0 .03-.05c.5-5.26-.84-9.82-3.55-13.87a.06.06 0 0 0-.03-.03ZM8.02 15.5c-1.2 0-2.19-1.1-2.19-2.45s.96-2.45 2.19-2.45c1.24 0 2.22 1.1 2.2 2.45 0 1.35-.97 2.45-2.2 2.45Zm7.96 0c-1.2 0-2.19-1.1-2.19-2.45s.96-2.45 2.19-2.45c1.24 0 2.22 1.1 2.2 2.45 0 1.35-.96 2.45-2.2 2.45Z"/></svg>
           Discord
         </a>
@@ -356,7 +357,7 @@ foreach ($nodesByCountry as $cc => $info) {
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2ZM4 9h10.5v3.5H4V9Zm0 5.5h10.5V18H4v-3.5ZM20 18h-3.5V9H20v9Z"/></svg>
           BGP
         </a>
-        <a class="nav-link" href="/subscribe.php">
+        <a class="nav-link" href="/subscribe">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>
           Subscribe
         </a>
@@ -738,7 +739,7 @@ foreach ($nodesByCountry as $cc => $info) {
                 $sysUptimeHuman = ($ud > 0 ? $ud . 'd ' : '') . $uh . 'h ' . $um . 'm';
             }
             ?>
-            <a id="node-row-<?= e((string)$nodeId) ?>" data-node-id="<?= e((string)$nodeId) ?>" class="fc-card<?= e($cardClass) ?>" href="/node.php?node_id=<?= e((string)$nodeId) ?>">
+            <a id="node-row-<?= e((string)$nodeId) ?>" data-node-id="<?= e((string)$nodeId) ?>" class="fc-card<?= e($cardClass) ?>" href="/node?node_id=<?= e((string)$nodeId) ?>">
               <div class="fc-top">
                 <div class="fc-identity">
                   <div class="fc-name"><?= e((string)$node['name']) ?></div>

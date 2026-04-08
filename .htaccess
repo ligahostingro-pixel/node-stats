@@ -19,6 +19,10 @@ RewriteRule ^(.+)$ public/$1 [L]
 RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -d
 RewriteRule ^(.+)$ public/$1 [L]
 
+# ── Clean URLs: route extensionless paths to .php in public/ ─
+RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI}.php -f
+RewriteRule ^(.+)$ public/$1.php [L]
+
 # Default: send to public/index.php
 RewriteCond %{REQUEST_URI} !^/public/
 RewriteCond %{REQUEST_FILENAME} !-f

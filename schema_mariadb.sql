@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `ssh_host`      VARCHAR(255) DEFAULT NULL,
     `ssh_port`      INT          DEFAULT NULL,
     `ssh_user`      VARCHAR(120) DEFAULT NULL,
-    `ssh_password`  VARCHAR(255) DEFAULT NULL,
+    `ssh_password`  VARCHAR(500) DEFAULT NULL COMMENT 'encrypted with sodium if APP_SECRET_KEY set',
     `net_interface` VARCHAR(80)  DEFAULT NULL,
     `endpoint_url`  VARCHAR(400) DEFAULT NULL,
     `api_token`     VARCHAR(255) DEFAULT NULL,
@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS `samples` (
     `error_text`     TEXT         DEFAULT NULL,
     PRIMARY KEY (`id`),
     INDEX `idx_samples_node_ts` (`node_id`, `ts`),
+    INDEX `idx_samples_node_ts_desc` (`node_id`, `ts` DESC),
     CONSTRAINT `fk_samples_node` FOREIGN KEY (`node_id`) REFERENCES `nodes` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -91,7 +92,9 @@ CREATE TABLE IF NOT EXISTS `announcements` (
     `resolved_at` INT          DEFAULT NULL,
     `created_at`  INT          NOT NULL,
     `created_by`  VARCHAR(60)  NOT NULL,
-    PRIMARY KEY (`id`)
+    PRIMARY KEY (`id`),
+    INDEX `idx_ann_pinned_created` (`pinned` DESC, `created_at` DESC),
+    INDEX `idx_ann_node_resolved` (`node_id`, `resolved_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------
@@ -130,4 +133,37 @@ CREATE TABLE IF NOT EXISTS `announcement_updates` (
     CONSTRAINT `fk_updates_announcement` FOREIGN KEY (`announcement_id`) REFERENCES `announcements` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- -----------------------------------------------------------
+-- audit_log
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `audit_log` (
+    `id`         INT          NOT NULL AUTO_INCREMENT,
+    `ts`         INT          NOT NULL,
+    `user`       VARCHAR(60)  NOT NULL DEFAULT 'system',
+    `action`     VARCHAR(80)  NOT NULL,
+    `detail`     TEXT         DEFAULT NULL,
+    `ip`         VARCHAR(45)  DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    INDEX `idx_audit_ts` (`ts` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- ============================================================
+-- Migration for existing installations:
+-- Run these statements if tables already exist.
+-- ============================================================
+-- ALTER TABLE `nodes` MODIFY `ssh_password` VARCHAR(500) DEFAULT NULL COMMENT 'encrypted with sodium if APP_SECRET_KEY set';
+-- CREATE INDEX IF NOT EXISTS `idx_samples_node_ts_desc` ON `samples` (`node_id`, `ts` DESC);
+-- CREATE INDEX IF NOT EXISTS `idx_ann_pinned_created` ON `announcements` (`pinned` DESC, `created_at` DESC);
+-- CREATE INDEX IF NOT EXISTS `idx_ann_node_resolved` ON `announcements` (`node_id`, `resolved_at`);
+-- CREATE TABLE IF NOT EXISTS `audit_log` (
+--     `id`     INT NOT NULL AUTO_INCREMENT,
+--     `ts`     INT NOT NULL,
+--     `user`   VARCHAR(60) NOT NULL DEFAULT 'system',
+--     `action` VARCHAR(80) NOT NULL,
+--     `detail` TEXT DEFAULT NULL,
+--     `ip`     VARCHAR(45) DEFAULT NULL,
+--     PRIMARY KEY (`id`),
+--     INDEX `idx_audit_ts` (`ts` DESC)
+-- ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

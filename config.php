@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-date_default_timezone_set('Europe/Bucharest');
+date_default_timezone_set(getenv('APP_TIMEZONE') ?: 'Europe/Bucharest');
 
 const APP_NAME = 'Node Status';
 const DATA_DIR = __DIR__ . '/data';
@@ -21,3 +21,7 @@ define('DB_PASS', getenv('DB_PASS') ?: '');
 define('ADMIN_DEFAULT_USER', getenv('STATUS_ADMIN_USER') ?: 'admin');
 define('ADMIN_DEFAULT_PASS', getenv('STATUS_ADMIN_PASS') ?: 'admin123');
 define('NODE_AGENT_TOKEN', getenv('NODE_AGENT_TOKEN') ?: '');
+
+/* ── Encryption key for SSH passwords (32 bytes hex = 64 chars) */
+/* Generate with: php -r "echo bin2hex(sodium_crypto_secretbox_keygen());"  */
+define('APP_SECRET_KEY', getenv('APP_SECRET_KEY') ?: '');

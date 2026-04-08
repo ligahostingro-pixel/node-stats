@@ -290,7 +290,7 @@ $statusText = match ($liveStatus) {
           </div>
           <div class="days-list">
             <?php foreach ($availableDays as $day): ?>
-              <a class="<?= $day === $selectedDate ? 'day-active' : '' ?>" href="/node.php?node_id=<?= e((string)$selectedNode['id']) ?>&date=<?= e($day) ?>"><?= e($day) ?></a>
+              <a class="<?= $day === $selectedDate ? 'day-active' : '' ?>" href="/node?node_id=<?= e((string)$selectedNode['id']) ?>&date=<?= e($day) ?>"><?= e($day) ?></a>
             <?php endforeach; ?>
           </div>
         </section>
@@ -359,7 +359,7 @@ $statusText = match ($liveStatus) {
             $pageUrl = static function (int $p) use ($selectedNode, $selectedDate, $perPage): string {
                 $params = ['node_id' => (string)$selectedNode['id'], 'date' => $selectedDate, 'page' => (string)$p];
                 if ($perPage !== 25) { $params['per_page'] = (string)$perPage; }
-                return '/node.php?' . http_build_query($params);
+                return '/node?' . http_build_query($params);
             };
             ?>
             <?php if ($currentPage > 1): ?>

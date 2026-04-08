@@ -27,6 +27,8 @@ $parseDateTime = static function (?string $value): ?int {
 $loginFailed = false;
 $passwordChanged = false;
 $passwordError = '';
+$testResult = null;
+$testNodeId = 0;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = (string)($_POST['csrf_token'] ?? '');
@@ -69,6 +71,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             header('Location: /admin/');
             exit;
+        }
+
+        if (is_admin() && $action === 'clear_samples') {
+            $id = (int)($_POST['id'] ?? 0);
+            if ($id > 0) {
+                clear_node_samples($id);
+            }
+            header('Location: /admin/#nodes');
+            exit;
+        }
+
+        if (is_admin() && $action === 'test_node') {
+            $id = (int)($_POST['id'] ?? 0);
+            if ($id > 0) {
+                $testNodeId = $id;
+                $allNodesForTest = all_nodes(false);
+                foreach ($allNodesForTest as $n) {
+                    if ((int)$n['id'] === $id) {
+                        $testResult = test_node_connection($n);
+                        break;
+                    }
+                }
+            }
         }
 
         if (is_admin() && $action === 'add_announcement') {
@@ -420,12 +445,26 @@ foreach ($nodes as $node) {
                       <?php endif; ?>
                     </div>
                   </div>
-                  <form method="post">
-                    <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
-                    <input type="hidden" name="action" value="delete_node">
-                    <input type="hidden" name="id" value="<?= e((string)$node['id']) ?>">
-                    <button class="btn-danger btn-sm" type="submit">Delete</button>
-                  </form>
+                  <div class="anc-actions">
+                    <form method="post" style="display:inline">
+                      <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                      <input type="hidden" name="action" value="test_node">
+                      <input type="hidden" name="id" value="<?= e((string)$node['id']) ?>">
+                      <button class="btn-secondary btn-sm" type="submit">Test</button>
+                    </form>
+                    <form method="post" style="display:inline" onsubmit="return confirm('Clear all samples for this node?')">
+                      <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                      <input type="hidden" name="action" value="clear_samples">
+                      <input type="hidden" name="id" value="<?= e((string)$node['id']) ?>">
+                      <button class="btn-warning btn-sm" type="submit">Clear samples</button>
+                    </form>
+                    <form method="post" style="display:inline" onsubmit="return confirm('Delete this node permanently?')">
+                      <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                      <input type="hidden" name="action" value="delete_node">
+                      <input type="hidden" name="id" value="<?= e((string)$node['id']) ?>">
+                      <button class="btn-danger btn-sm" type="submit">Delete</button>
+                    </form>
+                  </div>
                 </div>
                 <div class="anc-details">
                   <?php if (trim((string)($node['ssh_host'] ?? '')) !== ''): ?>
@@ -453,6 +492,45 @@ foreach ($nodes as $node) {
                     </div>
                   <?php endif; ?>
                 </div>
+                <?php if ($testResult !== null && $testNodeId === (int)$node['id']): ?>
+                  <div class="anc-test-result <?= $testResult['ok'] ? 'anc-test-ok' : 'anc-test-fail' ?>">
+                    <div class="anc-test-header">
+                      <strong><?= $testResult['ok'] ? '✅ Connection OK' : '❌ Connection Failed' ?></strong>
+                      <span><?= e((string)$testResult['details']['response_ms']) ?>ms</span>
+                    </div>
+                    <div class="anc-test-details">
+                      <span><b>Method:</b> <?= e((string)$testResult['details']['method']) ?></span>
+                      <span><b>Status:</b> <?= e((string)$testResult['details']['status']) ?></span>
+                      <?php if ($testResult['details']['hostname'] !== null): ?>
+                        <span><b>Hostname:</b> <?= e((string)$testResult['details']['hostname']) ?></span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['os_name'] !== null): ?>
+                        <span><b>OS:</b> <?= e((string)$testResult['details']['os_name']) ?></span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['cpu_pct'] !== null): ?>
+                        <span><b>CPU:</b> <?= e(number_format((float)$testResult['details']['cpu_pct'], 1)) ?>%</span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['cpu_name'] !== null): ?>
+                        <span><b>Processor:</b> <?= e((string)$testResult['details']['cpu_name']) ?></span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['cpu_cores'] !== null): ?>
+                        <span><b>Cores:</b> <?= e((string)$testResult['details']['cpu_cores']) ?></span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['mem_used_pct'] !== null): ?>
+                        <span><b>RAM:</b> <?= e(number_format((float)$testResult['details']['mem_used_pct'], 1)) ?>%</span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['disk_used_pct'] !== null): ?>
+                        <span><b>Disk:</b> <?= e(number_format((float)$testResult['details']['disk_used_pct'], 1)) ?>%</span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['load1'] !== null): ?>
+                        <span><b>Load:</b> <?= e(number_format((float)$testResult['details']['load1'], 2)) ?></span>
+                      <?php endif; ?>
+                      <?php if ($testResult['details']['error'] !== null): ?>
+                        <span class="anc-test-error"><b>Error:</b> <?= e((string)$testResult['details']['error']) ?></span>
+                      <?php endif; ?>
+                    </div>
+                  </div>
+                <?php endif; ?>
               </div>
             <?php endforeach; ?>
           </div>

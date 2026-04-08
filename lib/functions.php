@@ -91,6 +91,84 @@ function ensure_storage(): void
 
     db();
     seed_default_admin();
+    ensure_audit_log_table();
+}
+
+/* ── Encryption helpers for SSH passwords ────────────────────── */
+
+function encrypt_value(string $plaintext): string
+{
+    $key = APP_SECRET_KEY;
+    if ($key === '' || strlen($key) < 64) {
+        return $plaintext; // no key configured — store as-is (backward compat)
+    }
+
+    $keyBin = sodium_hex2bin($key);
+    $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $cipher = sodium_crypto_secretbox($plaintext, $nonce, $keyBin);
+
+    return 'enc:' . base64_encode($nonce . $cipher);
+}
+
+function decrypt_value(string $stored): string
+{
+    if (!str_starts_with($stored, 'enc:')) {
+        return $stored; // plaintext (legacy or no key)
+    }
+
+    $key = APP_SECRET_KEY;
+    if ($key === '' || strlen($key) < 64) {
+        return ''; // can't decrypt without key
+    }
+
+    $keyBin = sodium_hex2bin($key);
+    $raw = base64_decode(substr($stored, 4), true);
+    if ($raw === false || strlen($raw) < SODIUM_CRYPTO_SECRETBOX_NONCEBYTES + SODIUM_CRYPTO_SECRETBOX_MACBYTES) {
+        return '';
+    }
+
+    $nonce = substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $cipher = substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $plain = sodium_crypto_secretbox_open($cipher, $nonce, $keyBin);
+
+    return $plain !== false ? $plain : '';
+}
+
+/* ── Input validation helpers ────────────────────────────────── */
+
+function is_valid_net_interface(?string $name): bool
+{
+    if ($name === null || $name === '') {
+        return true; // empty is ok
+    }
+    return (bool)preg_match('/^[a-zA-Z0-9._\-]{1,40}$/', $name);
+}
+
+/* ── Audit log ───────────────────────────────────────────────── */
+
+function audit_log(string $action, ?string $detail = null): void
+{
+    try {
+        $user = 'system';
+        if (function_exists('is_admin') && is_admin()) {
+            $user = admin_user();
+        }
+        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+
+        $stmt = db()->prepare(
+            'INSERT INTO audit_log (ts, user, action, detail, ip)
+             VALUES (:ts, :user, :action, :detail, :ip)'
+        );
+        $stmt->execute([
+            ':ts'     => time(),
+            ':user'   => substr($user, 0, 60),
+            ':action' => substr($action, 0, 80),
+            ':detail' => $detail !== null ? substr($detail, 0, 2000) : null,
+            ':ip'     => $ip !== null ? substr($ip, 0, 45) : null,
+        ]);
+    } catch (\Throwable $e) {
+        // never let audit failure break the app
+    }
 }
 
 function db(): PDO
@@ -151,6 +229,22 @@ function seed_default_admin(): void
             ':created_at' => time(),
         ]);
     }
+}
+
+function ensure_audit_log_table(): void
+{
+    db()->exec(
+        'CREATE TABLE IF NOT EXISTS `audit_log` (
+            `id`     INT          NOT NULL AUTO_INCREMENT,
+            `ts`     INT          NOT NULL,
+            `user`   VARCHAR(60)  NOT NULL DEFAULT \'system\',
+            `action` VARCHAR(80)  NOT NULL,
+            `detail` TEXT         DEFAULT NULL,
+            `ip`     VARCHAR(45)  DEFAULT NULL,
+            PRIMARY KEY (`id`),
+            INDEX `idx_audit_ts` (`ts` DESC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
 }
 
 function get_state_value(string $key, string $default = ''): string
@@ -218,6 +312,14 @@ function add_node(
         return false;
     }
 
+    if (!is_valid_net_interface($netInterface)) {
+        return false;
+    }
+
+    $encryptedPassword = ($type === 'remote' && $sshPassword !== null && $sshPassword !== '')
+        ? encrypt_value(substr($sshPassword, 0, 255))
+        : null;
+
     $stmt = db()->prepare(
         'INSERT INTO nodes (
             name, node_type, ssh_host, ssh_port, ssh_user, ssh_password, net_interface,
@@ -234,7 +336,7 @@ function add_node(
         ':ssh_host' => $type === 'remote' && $sshHost !== null && $sshHost !== '' ? substr($sshHost, 0, 255) : null,
         ':ssh_port' => $type === 'remote' && $sshPort !== null && $sshPort > 0 ? $sshPort : null,
         ':ssh_user' => $type === 'remote' && $sshUser !== null && $sshUser !== '' ? substr($sshUser, 0, 120) : null,
-        ':ssh_password' => $type === 'remote' && $sshPassword !== null && $sshPassword !== '' ? substr($sshPassword, 0, 255) : null,
+        ':ssh_password' => $encryptedPassword,
         ':net_interface' => $type === 'remote' && $netInterface !== null && $netInterface !== '' ? substr($netInterface, 0, 80) : null,
         ':url' => $type === 'remote' ? substr((string)$endpointUrl, 0, 400) : null,
         ':token' => $type === 'remote' ? substr((string)$apiToken, 0, 255) : null,
@@ -242,13 +344,60 @@ function add_node(
         ':created_at' => time(),
     ]);
 
+    audit_log('add_node', 'Added node: ' . $name . ' (' . $type . ')');
     return true;
 }
 
 function delete_node(int $id): void
 {
-    $stmt = db()->prepare('DELETE FROM nodes WHERE id = :id');
+    $pdo = db();
+    // Clean up announcements linked to this node
+    $stmt = $pdo->prepare('DELETE FROM announcements WHERE node_id = :id');
     $stmt->execute([':id' => $id]);
+    // Delete node (samples cascade via FK)
+    $stmt = $pdo->prepare('DELETE FROM nodes WHERE id = :id');
+    $stmt->execute([':id' => $id]);
+    audit_log('delete_node', 'Deleted node id=' . $id);
+}
+
+function clear_node_samples(int $nodeId): void
+{
+    $stmt = db()->prepare('DELETE FROM samples WHERE node_id = :nid');
+    $stmt->execute([':nid' => $nodeId]);
+    audit_log('clear_samples', 'Cleared samples for node_id=' . $nodeId);
+}
+
+function test_node_connection(array $node): array
+{
+    $start = microtime(true);
+    $result = collect_node_metrics($node);
+    $elapsed = round((microtime(true) - $start) * 1000);
+
+    $ok = ($result['status'] ?? 'down') !== 'down';
+    $details = [];
+    $details['status'] = $result['status'] ?? 'down';
+    $details['response_ms'] = $elapsed;
+    $details['error'] = $result['error_text'] ?? null;
+    $details['hostname'] = $result['hostname'] ?? null;
+    $details['os_name'] = $result['os_name'] ?? null;
+    $details['cpu_pct'] = $result['cpu_pct'] ?? null;
+    $details['cpu_name'] = $result['cpu_name'] ?? null;
+    $details['cpu_cores'] = $result['cpu_cores'] ?? null;
+    $details['mem_used_pct'] = $result['mem_used_pct'] ?? null;
+    $details['disk_used_pct'] = $result['disk_used_pct'] ?? null;
+    $details['load1'] = $result['load1'] ?? null;
+
+    $method = 'none';
+    if (($node['node_type'] ?? 'remote') === 'local') {
+        $method = 'local (/proc)';
+    } elseif (trim((string)($node['endpoint_url'] ?? '')) !== '') {
+        $method = 'HTTP agent (' . (string)$node['endpoint_url'] . ')';
+    } elseif (trim((string)($node['ssh_host'] ?? '')) !== '') {
+        $method = 'SSH (' . (string)$node['ssh_user'] . '@' . (string)$node['ssh_host'] . ':' . ((int)($node['ssh_port'] ?? 22)) . ')';
+    }
+    $details['method'] = $method;
+
+    return ['ok' => $ok, 'details' => $details];
 }
 
 function load_announcements(): array
@@ -1064,10 +1213,10 @@ CORES=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
 printf '"cpu_name":"%s","cpu_cores":%s,' "$CPUNAME" "${CORES:-null}"
 
 # cpu usage (2 samples, 200ms apart)
-read -r _ U1 N1 S1 I1 W1 Q1 X1 < /proc/stat 2>/dev/null
+read -r _ U1 N1 S1 I1 W1 Q1 X1 ST1 _REST < /proc/stat 2>/dev/null
 sleep 0.2
-read -r _ U2 N2 S2 I2 W2 Q2 X2 < /proc/stat 2>/dev/null
-T1=$((U1+N1+S1+I1+W1+Q1+X1)); T2=$((U2+N2+S2+I2+W2+Q2+X2))
+read -r _ U2 N2 S2 I2 W2 Q2 X2 ST2 _REST < /proc/stat 2>/dev/null
+T1=$((U1+N1+S1+I1+W1+Q1+X1+${ST1:-0})); T2=$((U2+N2+S2+I2+W2+Q2+X2+${ST2:-0}))
 DT=$((T2-T1)); DI=$((I2-I1+W2-W1))
 if [ "$DT" -gt 0 ] 2>/dev/null; then
   CPU=$(awk "BEGIN{printf \"%.2f\", (1-${DI}/${DT})*100}")
@@ -1202,11 +1351,15 @@ function collect_node_metrics(array $node): array
 
     // Try SSH
     if (trim((string)($node['ssh_host'] ?? '')) !== '') {
+        $sshPass = (string)($node['ssh_password'] ?? '');
+        if ($sshPass !== '') {
+            $sshPass = decrypt_value($sshPass);
+        }
         return collect_via_ssh(
             (string)$node['ssh_host'],
             ((int)($node['ssh_port'] ?? 0)) > 0 ? (int)$node['ssh_port'] : 22,
             (string)($node['ssh_user'] ?? 'root'),
-            (string)($node['ssh_password'] ?? ''),
+            $sshPass,
             (string)($node['net_interface'] ?? '')
         );
     }
@@ -1328,6 +1481,25 @@ function latest_sample_for_node(int $nodeId): ?array
     $row = $stmt->fetch();
 
     return is_array($row) ? $row : null;
+}
+
+/** Bulk-fetch the latest sample per node in a single query. */
+function all_latest_samples(): array
+{
+    $stmt = db()->query(
+        'SELECT s.* FROM samples s
+         INNER JOIN (
+             SELECT node_id, MAX(ts) AS max_ts
+             FROM samples
+             GROUP BY node_id
+         ) latest ON s.node_id = latest.node_id AND s.ts = latest.max_ts'
+    );
+    $rows = $stmt->fetchAll();
+    $map = [];
+    foreach ($rows as $row) {
+        $map[(int)$row['node_id']] = $row;
+    }
+    return $map;
 }
 
 /** Return current network rate [rx_bps, tx_bps] by comparing the two most recent samples. */
@@ -1605,6 +1777,7 @@ function login_admin(string $username, string $password): bool
     $_SESSION['is_admin'] = true;
     $_SESSION['admin_user'] = (string)$admin['username'];
     $_SESSION['admin_id'] = (int)$admin['id'];
+    audit_log('login', 'Admin login: ' . (string)$admin['username']);
     return true;
 }
 
@@ -1639,6 +1812,7 @@ function change_admin_password(string $currentPassword, string $newPassword): bo
 
     $upd = db()->prepare('UPDATE admins SET password = :p WHERE id = :id');
     $upd->execute([':p' => password_hash($newPassword, PASSWORD_BCRYPT), ':id' => $adminId]);
+    audit_log('change_password', 'Admin id=' . $adminId . ' changed password');
     return true;
 }
 
@@ -1904,7 +2078,7 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
     foreach ($subscribers as $sub) {
         $email = (string)$sub['email'];
         $token = (string)$sub['token'];
-        $unsubLink = rtrim(get_state_value('site_base_url', ''), '/') . '/subscribe.php?action=unsubscribe&token=' . rawurlencode($token);
+        $unsubLink = rtrim(get_state_value('site_base_url', ''), '/') . '/subscribe?action=unsubscribe&token=' . rawurlencode($token);
 
         $personalHtml = $bodyHtml . '<p style="margin-top:24px;font-size:12px;color:#888;"><a href="' . htmlspecialchars($unsubLink, ENT_QUOTES, 'UTF-8') . '">Unsubscribe</a></p>';
 
