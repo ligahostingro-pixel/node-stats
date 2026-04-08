@@ -1,7 +1,4 @@
 # ─── Node Status — LiteSpeed / Apache root .htaccess ─────────
-# Routes ALL requests into public/ subfolder automatically.
-# Works with LiteSpeed, Apache 2.2+, OpenLiteSpeed.
-
 # Disable directory listing
 Options -Indexes
 
@@ -13,7 +10,17 @@ RewriteRule ^(lib|data|node-agent|\.git|bkp)(/|$) - [F,L]
 # ── Block root-level sensitive files ─────────────────────────
 RewriteRule ^(config\.php|cron\.php|schema_mariadb\.sql|add_node_temp\.php|README\.md|\.gitignore)$ - [F,L]
 
-# ── Forward everything else to public/ ───────────────────────
+# ── Serve from public/ ───────────────────────────────────────
+# Static files: if file exists in public/, serve it directly
+RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -f
+RewriteRule ^(.+)$ public/$1 [L]
+
+# Directories: rewrite to public/subfolder
+RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -d
+RewriteRule ^(.+)$ public/$1 [L]
+
+# Default: send to public/index.php
 RewriteCond %{REQUEST_URI} !^/public/
-RewriteRule ^(.*)$ public/$1 [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(.*)$ public/index.php [L]
 
