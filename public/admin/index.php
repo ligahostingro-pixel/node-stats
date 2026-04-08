@@ -167,9 +167,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           set_state_value('network_countries', trim((string)($_POST['network_countries'] ?? '')));
           set_state_value('network_power_label', trim((string)($_POST['network_power_label'] ?? '')));
           set_state_value('network_prefixes_v6', trim((string)($_POST['network_prefixes_v6'] ?? '')));
-          set_state_value('discord_webhook_url', trim((string)($_POST['discord_webhook_url'] ?? '')));
           set_state_value('locations_map', trim((string)($_POST['locations_map'] ?? '')));
           set_state_value('site_base_url', trim((string)($_POST['site_base_url'] ?? '')));
+
+          header('Location: /admin/#panel-settings');
+          exit;
+        }
+
+        if (is_admin() && $action === 'save_integrations') {
+          set_state_value('discord_webhook_url', trim((string)($_POST['discord_webhook_url'] ?? '')));
+
+          header('Location: /admin/#panel-settings');
+          exit;
+        }
+
+        if (is_admin() && $action === 'save_smtp') {
           set_state_value('notify_from_email', trim((string)($_POST['notify_from_email'] ?? '')));
           set_state_value('smtp_host', trim((string)($_POST['smtp_host'] ?? '')));
           set_state_value('smtp_port', trim((string)($_POST['smtp_port'] ?? '')));
@@ -191,15 +203,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
                 $fromEmail = trim(get_state_value('notify_from_email', ''));
                 $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
-                $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">SMTP Test</h2>'
-                    . '<p style="margin:8px 0 0;line-height:1.7;color:#cbd5e1;font-size:14px;">'
-                    . 'If you can read this, your SMTP settings are working correctly.'
-                    . '</p>';
-                $bodyHtml = build_email_layout('#4EA8FF', "\xE2\x9C\x89\xEF\xB8\x8F", 'TEST EMAIL', $inner, $networkAsn, $networkOrg, $baseUrl);
-                $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
-                $sent = smtp_send_email($testTo, '[' . $networkAsn . '] SMTP Test', $bodyHtml, $networkOrg . ' NOC', $fromEmail);
-                $_SESSION['smtp_test_result'] = $sent ? 'ok' : 'fail';
-                $_SESSION['smtp_test_to'] = $testTo;
+
+                $configErrors = [];
+                if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+                    $configErrors[] = 'Sender email (notify_from_email) is empty or invalid';
+                }
+                if ($baseUrl === '') {
+                    $configErrors[] = 'Site base URL is empty';
+                }
+
+                if (count($configErrors) > 0) {
+                    $_SESSION['smtp_test_result'] = 'config_error';
+                    $_SESSION['smtp_test_to'] = implode('; ', $configErrors);
+                } else {
+                    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">SMTP Test</h2>'
+                        . '<p style="margin:8px 0 0;line-height:1.7;color:#cbd5e1;font-size:14px;">'
+                        . 'If you can read this, your SMTP settings are working correctly.'
+                        . '</p>';
+                    $bodyHtml = build_email_layout('#4EA8FF', "\xE2\x9C\x89\xEF\xB8\x8F", 'TEST EMAIL', $inner, $networkAsn, $networkOrg, $baseUrl);
+                    $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
+                    $sent = smtp_send_email($testTo, '[' . $networkAsn . '] SMTP Test', $bodyHtml, $networkOrg . ' NOC', $fromEmail);
+                    $_SESSION['smtp_test_result'] = $sent ? 'ok' : 'fail';
+                    $_SESSION['smtp_test_to'] = $testTo;
+                }
             }
             header('Location: /admin/#panel-settings');
             exit;
@@ -873,17 +899,7 @@ foreach ($nodes as $node) {
 
             <form method="post" class="form-grid">
               <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
-              <input type="hidden" name="action" value="save_network_profile">
-
-              <!-- hidden fields to preserve other settings on save -->
-              <input type="hidden" name="network_asn" value="<?= e($networkAsn) ?>">
-              <input type="hidden" name="network_org" value="<?= e($networkOrg) ?>">
-              <input type="hidden" name="network_prefixes" value="<?= e($networkPrefixes) ?>">
-              <input type="hidden" name="network_prefixes_v6" value="<?= e($networkPrefixesV6) ?>">
-              <input type="hidden" name="network_countries" value="<?= e($networkCountries) ?>">
-              <input type="hidden" name="network_power_label" value="<?= e($networkPowerLabel) ?>">
-              <input type="hidden" name="locations_map" value="<?= e($locationsMapRaw) ?>">
-              <input type="hidden" name="site_base_url" value="<?= e($siteBaseUrl) ?>">
+              <input type="hidden" name="action" value="save_integrations">
 
               <label>
                 <span>Discord Webhook URL</span>
@@ -907,17 +923,7 @@ foreach ($nodes as $node) {
 
             <form method="post" class="form-grid">
               <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
-              <input type="hidden" name="action" value="save_network_profile">
-
-              <input type="hidden" name="network_asn" value="<?= e($networkAsn) ?>">
-              <input type="hidden" name="network_org" value="<?= e($networkOrg) ?>">
-              <input type="hidden" name="network_prefixes" value="<?= e($networkPrefixes) ?>">
-              <input type="hidden" name="network_prefixes_v6" value="<?= e($networkPrefixesV6) ?>">
-              <input type="hidden" name="network_countries" value="<?= e($networkCountries) ?>">
-              <input type="hidden" name="network_power_label" value="<?= e($networkPowerLabel) ?>">
-              <input type="hidden" name="locations_map" value="<?= e($locationsMapRaw) ?>">
-              <input type="hidden" name="site_base_url" value="<?= e($siteBaseUrl) ?>">
-              <input type="hidden" name="discord_webhook_url" value="<?= e($discordWebhookUrl) ?>">
+              <input type="hidden" name="action" value="save_smtp">
 
               <label>
                 <span>Sender email</span>
@@ -967,7 +973,13 @@ foreach ($nodes as $node) {
             ?>
             <?php if ($smtpTestResult !== null): ?>
               <div class="sub-alert sub-<?= $smtpTestResult === 'ok' ? 'success' : 'error' ?>" style="margin:12px 0 0;">
-                <?= $smtpTestResult === 'ok' ? '✅ Test email sent to ' . e($smtpTestTo) . '. Check your inbox.' : '❌ Failed to send test email to ' . e($smtpTestTo) . '. Check error logs.' ?>
+                <?php if ($smtpTestResult === 'ok'): ?>
+                  ✅ Test email sent to <?= e($smtpTestTo) ?>. Check your inbox.
+                <?php elseif ($smtpTestResult === 'config_error'): ?>
+                  ⚠️ Configuration missing: <?= e($smtpTestTo) ?>
+                <?php else: ?>
+                  ❌ Failed to send test email to <?= e($smtpTestTo) ?>. Check error logs.
+                <?php endif; ?>
               </div>
             <?php endif; ?>
 
