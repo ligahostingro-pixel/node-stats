@@ -706,7 +706,8 @@ foreach ($nodesByCountry as $cc => $info) {
             $uptime = $row['uptime'];
             $uptimeText = $uptime !== null ? number_format((float)$uptime, 3) . '%' : 'N/A';
             $lastCheckText = $latest !== null ? date('Y-m-d H:i', (int)($latest['ts'] ?? 0)) : 'never';
-            $hostText = is_string($latest['hostname'] ?? null) && trim((string)$latest['hostname']) !== '' ? (string)$latest['hostname'] : '';
+            $hostFull = is_string($latest['hostname'] ?? null) && trim((string)$latest['hostname']) !== '' ? (string)$latest['hostname'] : '';
+            $hostText = str_contains($hostFull, '.') ? strstr($hostFull, '.', true) : $hostFull;
             $cpuPct = is_numeric($latest['cpu_pct'] ?? null) ? (float)$latest['cpu_pct'] : null;
             $ramPct = is_numeric($latest['mem_used_pct'] ?? null) ? (float)$latest['mem_used_pct'] : null;
             $diskPct = is_numeric($latest['disk_used_pct'] ?? null) ? (float)$latest['disk_used_pct'] : null;

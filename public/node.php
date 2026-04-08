@@ -49,7 +49,8 @@ if ($selectedNode !== null) {
     $dayStatuses[$day] = node_day_status((int)$selectedNode['id'], $day);
   }
 }
-$hostName = is_string($latest['hostname'] ?? null) && trim((string)$latest['hostname']) !== '' ? (string)$latest['hostname'] : 'N/A';
+$hostFull = is_string($latest['hostname'] ?? null) && trim((string)$latest['hostname']) !== '' ? (string)$latest['hostname'] : 'N/A';
+$hostName = str_contains($hostFull, '.') ? strstr($hostFull, '.', true) : $hostFull;
 $osName = is_string($latest['os_name'] ?? null) && trim((string)$latest['os_name']) !== '' ? (string)$latest['os_name'] : 'N/A';
 $cpuName = is_string($latest['cpu_name'] ?? null) && trim((string)$latest['cpu_name']) !== '' ? (string)$latest['cpu_name'] : 'N/A';
 $cpuCores = is_numeric($latest['cpu_cores'] ?? null) ? (int)$latest['cpu_cores'] : null;
