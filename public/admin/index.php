@@ -180,8 +180,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           }
           set_state_value('smtp_encryption', trim((string)($_POST['smtp_encryption'] ?? 'none')));
 
-          header('Location: /admin/');
+          header('Location: /admin/#panel-settings');
           exit;
+        }
+
+        if (is_admin() && $action === 'test_smtp') {
+            $testTo = trim((string)($_POST['test_email'] ?? ''));
+            if ($testTo !== '' && filter_var($testTo, FILTER_VALIDATE_EMAIL)) {
+                $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+                $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+                $fromEmail = trim(get_state_value('notify_from_email', ''));
+                $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+                $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">SMTP Test</h2>'
+                    . '<p style="margin:8px 0 0;line-height:1.7;color:#cbd5e1;font-size:14px;">'
+                    . 'If you can read this, your SMTP settings are working correctly.'
+                    . '</p>';
+                $bodyHtml = build_email_layout('#4EA8FF', "\xE2\x9C\x89\xEF\xB8\x8F", 'TEST EMAIL', $inner, $networkAsn, $networkOrg, $baseUrl);
+                $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
+                $sent = smtp_send_email($testTo, '[' . $networkAsn . '] SMTP Test', $bodyHtml, $networkOrg . ' NOC', $fromEmail);
+                $_SESSION['smtp_test_result'] = $sent ? 'ok' : 'fail';
+                $_SESSION['smtp_test_to'] = $testTo;
+            }
+            header('Location: /admin/#panel-settings');
+            exit;
         }
 
         if (is_admin() && $action === 'delete_subscriber') {
@@ -936,6 +957,29 @@ foreach ($nodes as $node) {
 
               <div>
                 <button class="btn-primary" type="submit">Save SMTP</button>
+              </div>
+            </form>
+
+            <?php
+              $smtpTestResult = $_SESSION['smtp_test_result'] ?? null;
+              $smtpTestTo = $_SESSION['smtp_test_to'] ?? '';
+              unset($_SESSION['smtp_test_result'], $_SESSION['smtp_test_to']);
+            ?>
+            <?php if ($smtpTestResult !== null): ?>
+              <div class="sub-alert sub-<?= $smtpTestResult === 'ok' ? 'success' : 'error' ?>" style="margin:12px 0 0;">
+                <?= $smtpTestResult === 'ok' ? '✅ Test email sent to ' . e($smtpTestTo) . '. Check your inbox.' : '❌ Failed to send test email to ' . e($smtpTestTo) . '. Check error logs.' ?>
+              </div>
+            <?php endif; ?>
+
+            <form method="post" class="form-grid" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line);">
+              <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+              <input type="hidden" name="action" value="test_smtp">
+              <label>
+                <span>Send test email to</span>
+                <input type="email" name="test_email" placeholder="your@email.com" required maxlength="255">
+              </label>
+              <div>
+                <button class="btn-secondary" type="submit">Send test email</button>
               </div>
             </form>
           </article>

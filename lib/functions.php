@@ -2105,16 +2105,19 @@ function subscribe_email(string $email): array
 
 function send_confirmation_email(string $email, string $token): void
 {
+    error_log('[NOC] send_confirmation_email() called for: ' . $email);
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
     $fromName = $networkOrg . ' NOC';
     $fromEmail = trim(get_state_value('notify_from_email', ''));
     if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+        error_log('[NOC] send_confirmation_email: invalid notify_from_email: "' . $fromEmail . '"');
         return;
     }
 
     $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
     if ($baseUrl === '') {
+        error_log('[NOC] send_confirmation_email: site_base_url is empty');
         return;
     }
 
@@ -2137,7 +2140,8 @@ function send_confirmation_email(string $email, string $token): void
     // No unsubscribe footer for confirmation emails
     $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
 
-    smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
+    $sent = smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
+    error_log('[NOC] send_confirmation_email result for ' . $email . ': ' . ($sent ? 'OK' : 'FAILED'));
 }
 
 function confirm_subscriber(string $token): bool
@@ -2156,8 +2160,10 @@ function unsubscribe_by_token(string $token): bool
 
 function send_unsubscribe_email(string $email): bool
 {
+    error_log('[NOC] send_unsubscribe_email() called for: ' . $email);
     $email = strtolower(trim($email));
     if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        error_log('[NOC] send_unsubscribe_email: invalid email');
         return false;
     }
 
@@ -2165,6 +2171,7 @@ function send_unsubscribe_email(string $email): bool
     $stmt->execute([':email' => $email]);
     $row = $stmt->fetch();
     if (!is_array($row)) {
+        error_log('[NOC] send_unsubscribe_email: email not found in subscribers: ' . $email);
         return false;
     }
 
@@ -2174,11 +2181,13 @@ function send_unsubscribe_email(string $email): bool
     $fromName = $networkOrg . ' NOC';
     $fromEmail = trim(get_state_value('notify_from_email', ''));
     if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+        error_log('[NOC] send_unsubscribe_email: invalid notify_from_email: "' . $fromEmail . '"');
         return false;
     }
 
     $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
     if ($baseUrl === '') {
+        error_log('[NOC] send_unsubscribe_email: site_base_url is empty');
         return false;
     }
 
@@ -2201,6 +2210,7 @@ function send_unsubscribe_email(string $email): bool
     $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
 
     smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
+    error_log('[NOC] send_unsubscribe_email sent for: ' . $email);
     return true;
 }
 
