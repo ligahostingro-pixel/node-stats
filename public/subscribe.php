@@ -57,15 +57,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (csrf_valid($csrfToken) && $postAction === 'unsubscribe_email') {
         $email = (string)($_POST['email'] ?? '');
-        if (unsubscribe_by_email($email)) {
-            $message = 'You have been unsubscribed. You will no longer receive notifications.';
+        if (send_unsubscribe_email($email)) {
+            $message = 'A confirmation email has been sent. Please check your inbox and click the link to unsubscribe.';
             $messageType = 'success';
-            $action = 'unsubscribe';
         } else {
-            $message = 'Email not found or already unsubscribed.';
+            $message = 'Email not found or could not send confirmation.';
             $messageType = 'error';
-            $action = 'unsubscribe';
         }
+        $action = 'unsubscribe';
     }
 }
 ?>
@@ -149,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <button class="btn-danger" type="submit" style="width:100%">Unsubscribe</button>
               </div>
 
-              <p class="field-hint">You can also unsubscribe using the link at the bottom of any notification email.</p>
+              <p class="field-hint">We'll send a confirmation email to verify it's you. Click the link in the email to complete the unsubscribe.</p>
             </form>
           </div>
         <?php endif; ?>

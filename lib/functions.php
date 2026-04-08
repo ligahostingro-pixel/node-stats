@@ -33,11 +33,17 @@ function send_security_headers(): void
     }
 }
 
-/* ── Login rate limiting ─────────────────────────────────────────── */
+/* ── Login rate limiting (per-IP) ─────────────────────────────── */
+
+function _login_state_key(): string
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    return 'login_fails_' . md5($ip);
+}
 
 function check_login_throttle(): bool
 {
-    $state = get_state_value('login_fails', '');
+    $state = get_state_value(_login_state_key(), '');
     if ($state === '') {
         return true; // no failures recorded
     }
@@ -53,14 +59,15 @@ function check_login_throttle(): bool
     }
     // reset after 60s
     if ((time() - $lastTs) >= 60) {
-        set_state_value('login_fails', '');
+        set_state_value(_login_state_key(), '');
     }
     return true;
 }
 
 function record_login_failure(): void
 {
-    $state = get_state_value('login_fails', '');
+    $key = _login_state_key();
+    $state = get_state_value($key, '');
     $data  = is_string($state) && $state !== '' ? json_decode($state, true) : null;
     if (!is_array($data)) {
         $data = ['count' => 0, 'ts' => 0];
@@ -71,16 +78,22 @@ function record_login_failure(): void
     }
     $data['count'] = ((int)($data['count'] ?? 0)) + 1;
     $data['ts']    = time();
-    set_state_value('login_fails', json_encode($data));
+    set_state_value($key, json_encode($data));
 }
 
 function clear_login_failures(): void
 {
-    set_state_value('login_fails', '');
+    set_state_value(_login_state_key(), '');
 }
 
 function ensure_storage(): void
 {
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+
     if (!is_dir(DATA_DIR)) {
         mkdir(DATA_DIR, 0775, true);
     }
@@ -90,8 +103,14 @@ function ensure_storage(): void
     }
 
     db();
-    seed_default_admin();
-    ensure_audit_log_table();
+
+    // Only seed admin and audit table if needed (check app_state flag)
+    $initialized = get_state_value('schema_initialized', '');
+    if ($initialized !== '1') {
+        seed_default_admin();
+        ensure_audit_log_table();
+        set_state_value('schema_initialized', '1');
+    }
 }
 
 /* ── Encryption helpers for SSH passwords ────────────────────── */
@@ -320,6 +339,75 @@ function add_node(
     ]);
 
     audit_log('add_node', 'Added node: ' . $name . ' (' . $type . ')');
+    return true;
+}
+
+function update_node(
+    int $id,
+    string $name,
+    string $type,
+    ?string $endpointUrl,
+    ?string $apiToken,
+    ?string $sshHost = null,
+    ?int $sshPort = null,
+    ?string $sshUser = null,
+    ?string $sshPassword = null,
+    ?string $netInterface = null,
+    ?string $country = null
+): bool
+{
+    $name = trim($name);
+    $type = trim($type);
+    $endpointUrl = $endpointUrl !== null ? trim($endpointUrl) : null;
+    $apiToken = $apiToken !== null ? trim($apiToken) : null;
+    $sshHost = $sshHost !== null ? trim($sshHost) : null;
+    $sshUser = $sshUser !== null ? trim($sshUser) : null;
+    $sshPassword = $sshPassword !== null ? trim($sshPassword) : null;
+    $netInterface = $netInterface !== null ? trim($netInterface) : null;
+    $country = $country !== null ? trim($country) : null;
+
+    if ($name === '' || $id <= 0) {
+        return false;
+    }
+
+    if (!in_array($type, ['local', 'remote'], true)) {
+        return false;
+    }
+
+    if (!is_valid_net_interface($netInterface)) {
+        return false;
+    }
+
+    // If password field is blank, keep the existing password
+    $passwordSql = '';
+    $params = [
+        ':id' => $id,
+        ':name' => substr($name, 0, 120),
+        ':type' => $type,
+        ':ssh_host' => $type === 'remote' && $sshHost !== null && $sshHost !== '' ? substr($sshHost, 0, 255) : null,
+        ':ssh_port' => $type === 'remote' && $sshPort !== null && $sshPort > 0 ? $sshPort : null,
+        ':ssh_user' => $type === 'remote' && $sshUser !== null && $sshUser !== '' ? substr($sshUser, 0, 120) : null,
+        ':net_interface' => $type === 'remote' && $netInterface !== null && $netInterface !== '' ? substr($netInterface, 0, 80) : null,
+        ':url' => $type === 'remote' ? substr((string)$endpointUrl, 0, 400) : null,
+        ':token' => $type === 'remote' ? substr((string)$apiToken, 0, 255) : null,
+        ':country' => $country !== null && $country !== '' ? substr($country, 0, 10) : null,
+    ];
+
+    if ($sshPassword !== null && $sshPassword !== '') {
+        $passwordSql = ', ssh_password = :ssh_password';
+        $params[':ssh_password'] = ($type === 'remote') ? encrypt_value(substr($sshPassword, 0, 255)) : null;
+    }
+
+    $stmt = db()->prepare(
+        'UPDATE nodes SET
+            name = :name, node_type = :type, ssh_host = :ssh_host, ssh_port = :ssh_port,
+            ssh_user = :ssh_user, net_interface = :net_interface,
+            endpoint_url = :url, api_token = :token, country = :country' . $passwordSql . '
+         WHERE id = :id'
+    );
+
+    $stmt->execute($params);
+    audit_log('update_node', 'Updated node id=' . $id . ': ' . $name . ' (' . $type . ')');
     return true;
 }
 
@@ -1432,24 +1520,28 @@ function maybe_collect_sample(int $intervalSeconds = SAMPLE_INTERVAL_SECONDS, bo
 
     foreach ($nodes as $node) {
         $nodeId = (int)$node['id'];
-        $prevSamples = latest_samples_for_node($nodeId, 2);
-        $prevStatus = count($prevSamples) > 0 ? (string)($prevSamples[0]['status'] ?? 'unknown') : 'unknown';
-        $prevPrevStatus = count($prevSamples) > 1 ? (string)($prevSamples[1]['status'] ?? 'unknown') : 'unknown';
+        $prevSample = latest_sample_for_node($nodeId);
+        $prevStatus = $prevSample !== null ? (string)($prevSample['status'] ?? 'unknown') : 'unknown';
 
         $sample = collect_node_metrics($node);
         insert_sample($nodeId, $now, $sample);
         $count++;
 
         $newStatus = (string)($sample['status'] ?? 'unknown');
+        $downAlerted = get_state_value('node_' . $nodeId . '_down_alerted', '0') === '1';
 
         // Alert only after 2 consecutive "down" checks to avoid false alarms
-        if ($newStatus === 'down' && $prevStatus === 'down' && $prevPrevStatus !== 'down') {
+        if ($newStatus === 'down' && $prevStatus === 'down' && !$downAlerted) {
+            set_state_value('node_' . $nodeId . '_down_alerted', '1');
+            error_log('[NOC] DOWN alert fired for node ' . $nodeId . ' (' . $node['name'] . ')');
             notify_node_down((string)$node['name']);
             dispatch_discord_node_down((string)$node['name'], $nodeId);
             auto_create_downtime_announcement((string)$node['name'], $nodeId);
         }
-        // Recover only after 2 consecutive "not down" checks
-        if ($newStatus !== 'down' && $prevStatus !== 'down' && $prevPrevStatus === 'down') {
+        // Recover only after 2 consecutive "not down" checks AND a down alert was actually sent
+        if ($newStatus !== 'down' && $prevStatus !== 'down' && $downAlerted) {
+            set_state_value('node_' . $nodeId . '_down_alerted', '0');
+            error_log('[NOC] RECOVERY alert fired for node ' . $nodeId . ' (' . $node['name'] . ')');
             notify_node_recovered((string)$node['name']);
             dispatch_discord_node_recovered((string)$node['name'], $nodeId);
             auto_resolve_downtime_announcement($nodeId);
@@ -1516,6 +1608,46 @@ function node_net_rate(int $nodeId): array
     if ($rxDiff < 0) { $rxDiff = 0; }
     if ($txDiff < 0) { $txDiff = 0; }
     return [(int)round($rxDiff / $dt), (int)round($txDiff / $dt)];
+}
+
+/**
+ * Bulk-fetch network rates for all nodes using a single query.
+ * Returns [ nodeId => [rx_bps, tx_bps], ... ]
+ */
+function bulk_node_net_rates(): array
+{
+    // Get the 2 most recent samples per node using a window function
+    $rows = db()->query(
+        'SELECT node_id, ts, net_rx_bytes, net_tx_bytes
+         FROM (
+             SELECT node_id, ts, net_rx_bytes, net_tx_bytes,
+                    ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY ts DESC) AS rn
+             FROM samples
+         ) ranked
+         WHERE rn <= 2
+         ORDER BY node_id, ts DESC'
+    )->fetchAll();
+
+    $grouped = [];
+    foreach ($rows as $row) {
+        $nid = (int)$row['node_id'];
+        $grouped[$nid][] = $row;
+    }
+
+    $map = [];
+    foreach ($grouped as $nid => $samples) {
+        if (count($samples) < 2) {
+            $map[$nid] = [0, 0];
+            continue;
+        }
+        $dt = max(1, abs((int)$samples[0]['ts'] - (int)$samples[1]['ts']));
+        $rxDiff = (int)($samples[0]['net_rx_bytes'] ?? 0) - (int)($samples[1]['net_rx_bytes'] ?? 0);
+        $txDiff = (int)($samples[0]['net_tx_bytes'] ?? 0) - (int)($samples[1]['net_tx_bytes'] ?? 0);
+        if ($rxDiff < 0) { $rxDiff = 0; }
+        if ($txDiff < 0) { $txDiff = 0; }
+        $map[$nid] = [(int)round($rxDiff / $dt), (int)round($txDiff / $dt)];
+    }
+    return $map;
 }
 
 function node_live_status(?array $latest, int $staleThreshold = 900): string
@@ -1654,6 +1786,59 @@ function node_day_status(int $nodeId, string $date): string
     return 'up';
 }
 
+/**
+ * Bulk-fetch day statuses for all nodes across a list of dates in a single query.
+ * Returns [ nodeId => [ 'Y-m-d' => 'up'|'down'|'degraded'|'unknown', ... ], ... ]
+ */
+function bulk_node_day_statuses(array $dates): array
+{
+    if (count($dates) === 0) {
+        return [];
+    }
+
+    $startTs = strtotime(min($dates) . ' 00:00:00');
+    $endTs   = strtotime(max($dates) . ' 23:59:59');
+    if ($startTs === false || $endTs === false) {
+        return [];
+    }
+
+    $stmt = db()->prepare(
+        "SELECT node_id,
+                DATE(FROM_UNIXTIME(ts)) AS day,
+                SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_count,
+                SUM(CASE WHEN status = 'degraded' THEN 1 ELSE 0 END) AS degraded_count,
+                COUNT(*) AS total_count
+         FROM samples
+         WHERE ts BETWEEN :start_ts AND :end_ts
+         GROUP BY node_id, DATE(FROM_UNIXTIME(ts))"
+    );
+    $stmt->execute([':start_ts' => $startTs, ':end_ts' => $endTs]);
+    $rows = $stmt->fetchAll();
+
+    $map = [];
+    foreach ($rows as $row) {
+        $nid = (int)$row['node_id'];
+        $day = (string)$row['day'];
+        $down = (int)$row['down_count'];
+        $degraded = (int)$row['degraded_count'];
+
+        if ($down > 0) {
+            $status = 'down';
+        } elseif ($degraded > 0) {
+            $status = 'degraded';
+        } else {
+            $status = 'up';
+        }
+
+        if (!isset($map[$nid])) {
+            $map[$nid] = [];
+        }
+        $map[$nid][$day] = $status;
+    }
+
+    return $map;
+}
+
 function node_uptime_percent(int $nodeId, int $days = 30): ?float
 {
     $start = strtotime('-' . max(1, $days) . ' day');
@@ -1683,6 +1868,38 @@ function node_uptime_percent(int $nodeId, int $days = 30): ?float
     }
 
     return round(($up / $total) * 100, 4);
+}
+
+/**
+ * Bulk-fetch uptime percentages for all nodes in a single query.
+ * Returns [ nodeId => float|null, ... ]
+ */
+function bulk_node_uptime_percent(int $days = 30): array
+{
+    $start = strtotime('-' . max(1, $days) . ' day');
+    if ($start === false) {
+        return [];
+    }
+
+    $stmt = db()->prepare(
+        "SELECT node_id,
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count
+         FROM samples
+         WHERE ts >= :start_ts
+         GROUP BY node_id"
+    );
+    $stmt->execute([':start_ts' => $start]);
+    $rows = $stmt->fetchAll();
+
+    $map = [];
+    foreach ($rows as $row) {
+        $nid = (int)$row['node_id'];
+        $total = (int)$row['total_count'];
+        $up = (int)$row['up_count'];
+        $map[$nid] = $total > 0 ? round(($up / $total) * 100, 4) : null;
+    }
+    return $map;
 }
 
 function list_available_days(int $limit = 30): array
@@ -1781,7 +1998,12 @@ function login_admin(string $username, string $password): bool
 
 function logout_admin(): void
 {
-    unset($_SESSION['is_admin'], $_SESSION['admin_user'], $_SESSION['admin_id']);
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $p = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+    }
+    session_destroy();
 }
 
 function is_admin(): bool
@@ -1932,15 +2154,54 @@ function unsubscribe_by_token(string $token): bool
     return $stmt->rowCount() > 0;
 }
 
-function unsubscribe_by_email(string $email): bool
+function send_unsubscribe_email(string $email): bool
 {
     $email = strtolower(trim($email));
     if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         return false;
     }
-    $stmt = db()->prepare('DELETE FROM subscribers WHERE email = :email');
+
+    $stmt = db()->prepare('SELECT token FROM subscribers WHERE email = :email LIMIT 1');
     $stmt->execute([':email' => $email]);
-    return $stmt->rowCount() > 0;
+    $row = $stmt->fetch();
+    if (!is_array($row)) {
+        return false;
+    }
+
+    $token = (string)$row['token'];
+    $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $fromName = $networkOrg . ' NOC';
+    $fromEmail = trim(get_state_value('notify_from_email', ''));
+    if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+    if ($baseUrl === '') {
+        return false;
+    }
+
+    $unsubLink = $baseUrl . '/subscribe?action=unsubscribe&token=' . rawurlencode($token);
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+
+    $subject = '[' . $networkAsn . '] Confirm unsubscribe';
+
+    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">Confirm unsubscribe</h2>'
+        . '<p style="margin:8px 0 20px;line-height:1.7;color:#cbd5e1;font-size:14px;">'
+        . 'You requested to unsubscribe from status notifications for <strong style="color:#fff;">' . $esc($networkOrg) . '</strong>.'
+        . '<br>Click the button below to confirm. If you did not request this, ignore this email.'
+        . '</p>'
+        . '<table cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background:#EF4444;text-align:center;">'
+        . '<a href="' . $esc($unsubLink) . '" style="display:inline-block;padding:14px 32px;color:#fff;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.3px;">Confirm unsubscribe</a>'
+        . '</td></tr></table>'
+        . '<p style="margin:20px 0 0;font-size:12px;color:#64748b;line-height:1.5;">If you did not request this, no action is needed — your subscription remains active.</p>';
+
+    $bodyHtml = build_email_layout('#EF4444', "\xF0\x9F\x94\x95", 'UNSUBSCRIBE', $inner, $networkAsn, $networkOrg, $baseUrl);
+    $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
+
+    smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
+    return true;
 }
 
 function all_subscribers(bool $confirmedOnly = true): array
@@ -2116,6 +2377,7 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
 {
     $subscribers = all_subscribers(true);
     if (count($subscribers) === 0) {
+        error_log('[NOC] notify_subscribers: no confirmed subscribers, skipping email for: ' . $subject);
         return;
     }
 
@@ -2123,6 +2385,7 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
     $fromName = $networkOrg . ' NOC';
     $fromEmail = trim(get_state_value('notify_from_email', ''));
     if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+        error_log('[NOC] notify_subscribers: invalid or empty notify_from_email, skipping: ' . $subject);
         return;
     }
 
@@ -2146,7 +2409,8 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
             $headers[] = 'List-Unsubscribe: <' . $unsubLink . '>';
         }
 
-        smtp_send_email(
+        error_log('[NOC] Sending email to ' . $email . ' — Subject: ' . $subject);
+        $sent = smtp_send_email(
             $email,
             $subject,
             $personalHtml,
@@ -2154,6 +2418,9 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
             $fromEmail,
             $headers
         );
+        if (!$sent) {
+            error_log('[NOC] Email FAILED for ' . $email . ' — Subject: ' . $subject);
+        }
     }
 }
 
@@ -2294,6 +2561,8 @@ function notify_node_down(string $nodeName): void
 
 function notify_node_recovered(string $nodeName): void
 {
+    error_log('[NOC] notify_node_recovered() called for: ' . $nodeName);
+
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
     $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');

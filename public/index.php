@@ -177,14 +177,17 @@ $statusRank = [
 $nodeRows = [];
 $overallStatus = 'up';
 $latestSamplesMap = all_latest_samples();
+$bulkDayStatuses = bulk_node_day_statuses($days7);
+$bulkUptimes = bulk_node_uptime_percent(7);
+$bulkNetRates = bulk_node_net_rates();
 foreach ($nodes as $node) {
     $nodeId = (int)$node['id'];
     $latest = $latestSamplesMap[$nodeId] ?? null;
     $liveStatus = node_live_status($latest);
-    $uptime = node_uptime_percent($nodeId, 7);
+    $uptime = $bulkUptimes[$nodeId] ?? null;
     $days = [];
     foreach ($days7 as $day) {
-        $days[$day] = node_day_status($nodeId, $day);
+        $days[$day] = $bulkDayStatuses[$nodeId][$day] ?? 'unknown';
     }
 
     $row = [
@@ -255,7 +258,7 @@ foreach ($nodeRows as $row) {
   if (is_numeric($l['mem_total_mb'] ?? null)) { $fleetTotalRamMb += (float)$l['mem_total_mb']; }
   if (is_numeric($l['disk_total_gb'] ?? null)) { $fleetTotalDiskGb += (float)$l['disk_total_gb']; }
   if (is_numeric($l['cpu_cores'] ?? null)) { $fleetTotalCores += (int)$l['cpu_cores']; }
-  [$nRx, $nTx] = node_net_rate((int)$row['node']['id']);
+  [$nRx, $nTx] = $bulkNetRates[(int)$row['node']['id']] ?? [0, 0];
   $fleetNetRxRate += $nRx;
   $fleetNetTxRate += $nTx;
 }
@@ -290,7 +293,7 @@ foreach ($nodes as $node) {
   if ($cc === '') { continue; }
   if (!isset($nodesByCountry[$cc])) { $nodesByCountry[$cc] = ['total' => 0, 'up' => 0]; }
   $nodesByCountry[$cc]['total']++;
-  $nLatest = latest_sample_for_node((int)$node['id']);
+  $nLatest = $latestSamplesMap[(int)$node['id']] ?? null;
   if (node_live_status($nLatest) === 'up') { $nodesByCountry[$cc]['up']++; }
 }
 

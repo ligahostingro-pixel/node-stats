@@ -59,7 +59,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 isset($_POST['country']) ? (string)$_POST['country'] : null
             );
 
-            header('Location: /admin/');
+            header('Location: /admin/#nodes');
+            exit;
+        }
+
+        if (is_admin() && $action === 'edit_node') {
+            $id = (int)($_POST['id'] ?? 0);
+            if ($id > 0) {
+                update_node(
+                    $id,
+                    (string)($_POST['name'] ?? ''),
+                    (string)($_POST['node_type'] ?? 'remote'),
+                    isset($_POST['endpoint_url']) ? (string)$_POST['endpoint_url'] : null,
+                    isset($_POST['api_token']) ? (string)$_POST['api_token'] : null,
+                    isset($_POST['ssh_host']) ? (string)$_POST['ssh_host'] : null,
+                    isset($_POST['ssh_port']) && $_POST['ssh_port'] !== '' ? (int)$_POST['ssh_port'] : null,
+                    isset($_POST['ssh_user']) ? (string)$_POST['ssh_user'] : null,
+                    isset($_POST['ssh_password']) ? (string)$_POST['ssh_password'] : null,
+                    isset($_POST['net_interface']) ? (string)$_POST['net_interface'] : null,
+                    isset($_POST['country']) ? (string)$_POST['country'] : null
+                );
+            }
+            header('Location: /admin/#nodes');
             exit;
         }
 
@@ -462,6 +483,7 @@ foreach ($nodes as $node) {
                     </div>
                   </div>
                   <div class="anc-actions">
+                    <button class="btn-secondary btn-sm" type="button" onclick="this.closest('.admin-node-card').querySelector('.anc-edit-form').classList.toggle('is-visible')">Edit</button>
                     <form method="post" style="display:inline">
                       <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                       <input type="hidden" name="action" value="test_node">
@@ -547,6 +569,31 @@ foreach ($nodes as $node) {
                     </div>
                   </div>
                 <?php endif; ?>
+                <div class="anc-edit-form">
+                  <form method="post" class="form-grid">
+                    <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                    <input type="hidden" name="action" value="edit_node">
+                    <input type="hidden" name="id" value="<?= e((string)$node['id']) ?>">
+                    <div class="field-grid">
+                      <label><span>Node name</span><input type="text" name="name" value="<?= e((string)$node['name']) ?>" required></label>
+                      <label><span>Type</span>
+                        <select name="node_type">
+                          <option value="remote"<?= $nType === 'remote' ? ' selected' : '' ?>>remote</option>
+                          <option value="local"<?= $nType === 'local' ? ' selected' : '' ?>>local</option>
+                        </select>
+                      </label>
+                      <label><span>Host / IP</span><input type="text" name="ssh_host" value="<?= e((string)($node['ssh_host'] ?? '')) ?>"></label>
+                      <label><span>SSH port</span><input type="text" name="ssh_port" value="<?= e((string)($node['ssh_port'] ?? '')) ?>"></label>
+                      <label><span>SSH user</span><input type="text" name="ssh_user" value="<?= e((string)($node['ssh_user'] ?? '')) ?>"></label>
+                      <label><span>SSH password</span><input type="password" name="ssh_password" placeholder="leave blank to keep current"></label>
+                      <label><span>Network interface</span><input type="text" name="net_interface" value="<?= e((string)($node['net_interface'] ?? '')) ?>"></label>
+                      <label><span>Country code</span><input type="text" name="country" value="<?= e((string)($node['country'] ?? '')) ?>" maxlength="10"></label>
+                      <label><span>Agent endpoint URL</span><input type="text" name="endpoint_url" value="<?= e((string)($node['endpoint_url'] ?? '')) ?>"></label>
+                      <label><span>Agent API token</span><input type="text" name="api_token" value="<?= e((string)($node['api_token'] ?? '')) ?>"></label>
+                    </div>
+                    <div><button class="btn-primary btn-sm" type="submit">Save changes</button></div>
+                  </form>
+                </div>
               </div>
             <?php endforeach; ?>
           </div>

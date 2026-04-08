@@ -45,8 +45,10 @@ $uptime7 = $selectedNode !== null ? node_uptime_percent((int)$selectedNode['id']
 $days30 = last_days(30);
 $dayStatuses = [];
 if ($selectedNode !== null) {
+  $bulkDays = bulk_node_day_statuses($days30);
+  $nid = (int)$selectedNode['id'];
   foreach ($days30 as $day) {
-    $dayStatuses[$day] = node_day_status((int)$selectedNode['id'], $day);
+    $dayStatuses[$day] = $bulkDays[$nid][$day] ?? 'unknown';
   }
 }
 $hostFull = is_string($latest['hostname'] ?? null) && trim((string)$latest['hostname']) !== '' ? (string)$latest['hostname'] : 'N/A';

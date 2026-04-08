@@ -2838,6 +2838,25 @@ canvas {
   border-color: rgba(245, 158, 11, 0.4);
 }
 
+/* Node edit form (collapsible) */
+.anc-edit-form {
+  display: none;
+  margin-top: 12px;
+  padding: 16px;
+  border-top: 1px solid var(--line);
+}
+.anc-edit-form.is-visible {
+  display: block;
+}
+.anc-edit-form .field-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (max-width: 600px) {
+  .anc-edit-form .field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Node test result */
 .anc-test-result {
   margin-top: 12px;
