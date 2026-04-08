@@ -114,16 +114,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (is_admin() && $action === 'delete_announcement') {
             $id = (int)($_POST['id'] ?? 0);
+            $annRedirectPage = max(1, (int)($_POST['ann_page'] ?? 1));
             if ($id > 0) {
                 delete_announcement($id);
             }
 
-            header('Location: /admin/#announcements');
+            header('Location: /admin/?ann_page=' . $annRedirectPage . '#announcements');
             exit;
         }
 
         if (is_admin() && $action === 'add_announcement_update') {
             $announcementId = (int)($_POST['announcement_id'] ?? 0);
+            $annRedirectPage = max(1, (int)($_POST['ann_page'] ?? 1));
             if ($announcementId > 0) {
                 add_announcement_update(
                     $announcementId,
@@ -133,7 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
             }
 
-            header('Location: /admin/#announcements');
+            header('Location: /admin/?ann_page=' . $annRedirectPage . '#announcements');
             exit;
         }
 
@@ -679,6 +681,7 @@ foreach ($nodes as $node) {
                     <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                     <input type="hidden" name="action" value="add_announcement_update">
                     <input type="hidden" name="announcement_id" value="<?= e((string)$annId) ?>">
+                    <input type="hidden" name="ann_page" value="<?= $annPage ?>">
                     <select name="update_status">
                       <option value="investigating">Investigating</option>
                       <option value="identified">Identified</option>
@@ -693,6 +696,7 @@ foreach ($nodes as $node) {
                     <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                     <input type="hidden" name="action" value="delete_announcement">
                     <input type="hidden" name="id" value="<?= e((string)$item['id']) ?>">
+                    <input type="hidden" name="ann_page" value="<?= $annPage ?>">
                     <button class="btn-danger btn-sm" type="submit">Delete</button>
                   </form>
                 </div>

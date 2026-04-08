@@ -9,8 +9,11 @@ send_security_headers();
 
 ensure_storage();
 $force = isset($_GET['force']) && $_GET['force'] === '1';
-if ($force && !isset($_SERVER['HTTP_X_COLLECT_TOKEN'])) {
-    $force = false; // only allow force with explicit header
+if ($force) {
+    $token = $_SERVER['HTTP_X_COLLECT_TOKEN'] ?? '';
+    if ($token === '' || !defined('NODE_AGENT_TOKEN') || NODE_AGENT_TOKEN === '' || !hash_equals(NODE_AGENT_TOKEN, $token)) {
+        $force = false;
+    }
 }
 $result = maybe_collect_sample(SAMPLE_INTERVAL_SECONDS, $force);
 

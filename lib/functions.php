@@ -187,31 +187,6 @@ function db(): PDO
     return $pdo;
 }
 
-function seed_default_local_node(): void
-{
-    $pdo = db();
-    $stmt = $pdo->query('SELECT COUNT(*) AS c FROM nodes');
-    $count = (int)($stmt->fetch()['c'] ?? 0);
-
-    if ($count === 0) {
-        $insert = $pdo->prepare(
-                'INSERT INTO nodes (
-                     name, node_type, ssh_host, ssh_port, ssh_user, ssh_password, net_interface,
-                     endpoint_url, api_token, is_active, created_at
-                 ) VALUES (
-                     :name, :type, NULL, NULL, NULL, NULL, NULL,
-                     NULL, NULL, 1, :created_at
-                 )'
-        );
-
-        $insert->execute([
-            ':name' => (gethostname() ?: 'local-node') . ' (local)',
-            ':type' => 'local',
-            ':created_at' => time(),
-        ]);
-    }
-}
-
 function seed_default_admin(): void
 {
     $pdo = db();
@@ -778,6 +753,7 @@ function notify_announcement_update(string $annTitle, string $updateMessage, str
 {
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
     $statusUpper = strtoupper($updateStatus);
     $affected = $nodeName ?? 'All nodes';
 
@@ -792,18 +768,35 @@ function notify_announcement_update(string $annTitle, string $updateMessage, str
     ];
     $color = $colorMap[$updateStatus] ?? '#4EA8FF';
 
-    $bodyHtml = '<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">'
-        . '<div style="background:' . $color . ';color:#fff;padding:12px 20px;border-radius:8px 8px 0 0;font-weight:700;">' . htmlspecialchars($statusUpper, ENT_QUOTES, 'UTF-8') . '</div>'
-        . '<div style="background:#111827;color:#e5eefb;padding:20px;border:1px solid #1e293b;border-radius:0 0 8px 8px;">'
-        . '<h2 style="margin:0 0 8px;">' . htmlspecialchars($annTitle, ENT_QUOTES, 'UTF-8') . '</h2>'
-        . '<p style="color:#93a4bd;margin:0 0 12px;">Affected: ' . htmlspecialchars($affected, ENT_QUOTES, 'UTF-8') . '</p>'
-        . '<div style="border-left:3px solid ' . $color . ';padding:8px 16px;margin:0 0 12px;background:rgba(0,0,0,0.2);border-radius:0 6px 6px 0;">'
-        . '<p style="margin:0;font-weight:600;color:' . $color . ';">' . htmlspecialchars($statusUpper, ENT_QUOTES, 'UTF-8') . '</p>'
-        . '<p style="margin:4px 0 0;line-height:1.6;">' . nl2br(htmlspecialchars($updateMessage, ENT_QUOTES, 'UTF-8')) . '</p>'
-        . '</div>'
-        . '<p style="margin:0;font-size:12px;color:#64748b;">' . htmlspecialchars($networkAsn . ' • ' . $networkOrg, ENT_QUOTES, 'UTF-8') . '</p>'
-        . '</div></div>';
+    $iconMap = [
+        'investigating' => "\xF0\x9F\x94\x8D",
+        'identified' => "\xF0\x9F\x94\xA7",
+        'monitoring' => "\xF0\x9F\x91\x80",
+        'update' => "\xE2\x84\xB9\xEF\xB8\x8F",
+        'resolved' => "\xE2\x9C\x85",
+    ];
+    $icon = $iconMap[$updateStatus] ?? "\xE2\x84\xB9\xEF\xB8\x8F";
 
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+
+    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">' . $esc($annTitle) . '</h2>'
+        . '<table cellpadding="0" cellspacing="0" border="0" style="margin:12px 0 16px;">'
+        . '<tr>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Status</span><br>'
+        . '<span style="color:' . $color . ';font-weight:700;font-size:13px;">' . $esc($statusUpper) . '</span>'
+        . '</td>'
+        . '<td style="width:12px;"></td>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Affected</span><br>'
+        . '<span style="color:#e5eefb;font-weight:600;font-size:13px;">' . $esc($affected) . '</span>'
+        . '</td>'
+        . '</tr></table>'
+        . '<div style="border-left:3px solid ' . $color . ';padding:10px 16px;background:rgba(0,0,0,0.2);border-radius:0 6px 6px 0;">'
+        . '<p style="margin:0;line-height:1.7;color:#cbd5e1;font-size:14px;">' . nl2br($esc($updateMessage)) . '</p>'
+        . '</div>';
+
+    $bodyHtml = build_email_layout($color, $icon, $statusUpper, $inner, $networkAsn, $networkOrg, $baseUrl);
     $bodyText = $statusUpper . " — " . $annTitle . "\nAffected: " . $affected . "\n\n" . $updateMessage . "\n\n" . $networkAsn . ' • ' . $networkOrg;
 
     notify_subscribers($subject, $bodyHtml, $bodyText);
@@ -1446,22 +1439,28 @@ function maybe_collect_sample(int $intervalSeconds = SAMPLE_INTERVAL_SECONDS, bo
     $count = 0;
 
     foreach ($nodes as $node) {
-        $prevSample = latest_sample_for_node((int)$node['id']);
-        $prevStatus = $prevSample !== null ? (string)($prevSample['status'] ?? 'unknown') : 'unknown';
+        $nodeId = (int)$node['id'];
+        $prevSamples = latest_samples_for_node($nodeId, 2);
+        $prevStatus = count($prevSamples) > 0 ? (string)($prevSamples[0]['status'] ?? 'unknown') : 'unknown';
+        $prevPrevStatus = count($prevSamples) > 1 ? (string)($prevSamples[1]['status'] ?? 'unknown') : 'unknown';
 
         $sample = collect_node_metrics($node);
-        insert_sample((int)$node['id'], $now, $sample);
+        insert_sample($nodeId, $now, $sample);
         $count++;
 
         $newStatus = (string)($sample['status'] ?? 'unknown');
-        if ($newStatus === 'down' && $prevStatus !== 'down') {
+
+        // Alert only after 2 consecutive "down" checks to avoid false alarms
+        if ($newStatus === 'down' && $prevStatus === 'down' && $prevPrevStatus !== 'down') {
             notify_node_down((string)$node['name']);
-            dispatch_discord_node_down((string)$node['name'], (int)$node['id']);
-            auto_create_downtime_announcement((string)$node['name'], (int)$node['id']);
+            dispatch_discord_node_down((string)$node['name'], $nodeId);
+            auto_create_downtime_announcement((string)$node['name'], $nodeId);
         }
-        if ($newStatus !== 'down' && $prevStatus === 'down') {
-            dispatch_discord_node_recovered((string)$node['name'], (int)$node['id']);
-            auto_resolve_downtime_announcement((int)$node['id']);
+        // Recover only after 2 consecutive "not down" checks
+        if ($newStatus !== 'down' && $prevStatus !== 'down' && $prevPrevStatus === 'down') {
+            notify_node_recovered((string)$node['name']);
+            dispatch_discord_node_recovered((string)$node['name'], $nodeId);
+            auto_resolve_downtime_announcement($nodeId);
         }
     }
 
@@ -1481,6 +1480,13 @@ function latest_sample_for_node(int $nodeId): ?array
     $row = $stmt->fetch();
 
     return is_array($row) ? $row : null;
+}
+
+function latest_samples_for_node(int $nodeId, int $limit = 2): array
+{
+    $stmt = db()->prepare('SELECT * FROM samples WHERE node_id = :node_id ORDER BY ts DESC LIMIT ' . max(1, $limit));
+    $stmt->execute([':node_id' => $nodeId]);
+    return $stmt->fetchAll();
 }
 
 /** Bulk-fetch the latest sample per node in a single query. */
@@ -1899,18 +1905,23 @@ function send_confirmation_email(string $email, string $token): void
     }
 
     $confirmLink = $baseUrl . '/subscribe?action=confirm&token=' . rawurlencode($token);
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 
     $subject = '[' . $networkAsn . '] Confirm your subscription';
 
-    $bodyHtml = '<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">'
-        . '<div style="background:#4EA8FF;color:#fff;padding:12px 20px;border-radius:8px 8px 0 0;font-weight:700;">Confirm Subscription</div>'
-        . '<div style="background:#111827;color:#e5eefb;padding:20px;border:1px solid #1e293b;border-radius:0 0 8px 8px;">'
-        . '<h2 style="margin:0 0 12px;">Confirm your email</h2>'
-        . '<p style="margin:0 0 16px;line-height:1.6;">You requested to receive status notifications from <strong>' . htmlspecialchars($networkOrg, ENT_QUOTES, 'UTF-8') . '</strong>.</p>'
-        . '<p style="margin:0 0 16px;"><a href="' . htmlspecialchars($confirmLink, ENT_QUOTES, 'UTF-8') . '" style="display:inline-block;background:#4EA8FF;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700;">Confirm subscription</a></p>'
-        . '<p style="margin:0;font-size:12px;color:#64748b;">If you did not request this, you can ignore this email.</p>'
-        . '<p style="margin:16px 0 0;font-size:12px;color:#64748b;">' . htmlspecialchars($networkAsn . ' • ' . $networkOrg, ENT_QUOTES, 'UTF-8') . '</p>'
-        . '</div></div>';
+    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">Confirm your email</h2>'
+        . '<p style="margin:8px 0 20px;line-height:1.7;color:#cbd5e1;font-size:14px;">'
+        . 'You requested to receive status notifications from <strong style="color:#fff;">' . $esc($networkOrg) . '</strong>.'
+        . '<br>Click the button below to activate your subscription.'
+        . '</p>'
+        . '<table cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background:#4EA8FF;text-align:center;">'
+        . '<a href="' . $esc($confirmLink) . '" style="display:inline-block;padding:14px 32px;color:#fff;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.3px;">Confirm subscription</a>'
+        . '</td></tr></table>'
+        . '<p style="margin:20px 0 0;font-size:12px;color:#64748b;line-height:1.5;">If you did not request this, you can safely ignore this email.</p>';
+
+    $bodyHtml = build_email_layout('#4EA8FF', "\xF0\x9F\x94\x94", 'CONFIRM SUBSCRIPTION', $inner, $networkAsn, $networkOrg, $baseUrl);
+    // No unsubscribe footer for confirmation emails
+    $bodyHtml = str_replace('{{UNSUB_FOOTER}}', '', $bodyHtml);
 
     smtp_send_email($email, $subject, $bodyHtml, $fromName, $fromEmail);
 }
@@ -2123,12 +2134,25 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
         return;
     }
 
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+
     foreach ($subscribers as $sub) {
         $email = (string)$sub['email'];
         $token = (string)$sub['token'];
-        $unsubLink = rtrim(get_state_value('site_base_url', ''), '/') . '/subscribe?action=unsubscribe&token=' . rawurlencode($token);
+        $unsubLink = $baseUrl !== '' ? $baseUrl . '/subscribe?action=unsubscribe&token=' . rawurlencode($token) : '';
 
-        $personalHtml = $bodyHtml . '<p style="margin-top:24px;font-size:12px;color:#888;"><a href="' . htmlspecialchars($unsubLink, ENT_QUOTES, 'UTF-8') . '">Unsubscribe</a></p>';
+        $footer = '<tr><td style="padding:24px 32px;text-align:center;border-top:1px solid #1e293b;">';
+        if ($unsubLink !== '') {
+            $footer .= '<a href="' . htmlspecialchars($unsubLink, ENT_QUOTES, 'UTF-8') . '" style="color:#64748b;font-size:12px;text-decoration:underline;">Unsubscribe from notifications</a>';
+        }
+        $footer .= '</td></tr>';
+
+        $personalHtml = str_replace('{{UNSUB_FOOTER}}', $footer, $bodyHtml);
+
+        $headers = [];
+        if ($unsubLink !== '') {
+            $headers[] = 'List-Unsubscribe: <' . $unsubLink . '>';
+        }
 
         smtp_send_email(
             $email,
@@ -2136,37 +2160,103 @@ function notify_subscribers(string $subject, string $bodyHtml, string $bodyText)
             $personalHtml,
             $fromName,
             $fromEmail,
-            ['List-Unsubscribe: <' . $unsubLink . '>']
+            $headers
         );
     }
+}
+
+/**
+ * Build a consistent HTML email layout.
+ *
+ * @param string $bannerColor  Hex color for the top banner
+ * @param string $bannerIcon   Emoji/symbol for the banner
+ * @param string $bannerLabel  Label text on the banner
+ * @param string $innerHtml    Main content HTML (goes inside the body cell)
+ * @param string $networkAsn   e.g. "AS201131"
+ * @param string $networkOrg   e.g. "LIGA HOSTING LTD"
+ * @param string $statusPageUrl e.g. "https://as201131.net"
+ */
+function build_email_layout(string $bannerColor, string $bannerIcon, string $bannerLabel, string $innerHtml, string $networkAsn, string $networkOrg, string $statusPageUrl): string
+{
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+
+    $statusLink = '';
+    if ($statusPageUrl !== '') {
+        $statusLink = '<a href="' . $esc($statusPageUrl) . '" style="color:#4EA8FF;text-decoration:none;">View status page &rarr;</a>';
+    }
+
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#0a0f1a;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;">'
+        . '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#0a0f1a;padding:32px 16px;">'
+        . '<tr><td align="center">'
+        . '<table cellpadding="0" cellspacing="0" border="0" width="560" style="max-width:560px;width:100%;border-radius:12px;overflow:hidden;border:1px solid #1e293b;">'
+        // Banner
+        . '<tr><td style="background:' . $bannerColor . ';padding:16px 32px;text-align:center;">'
+        . '<span style="font-size:20px;vertical-align:middle;">' . $bannerIcon . '</span>'
+        . ' <span style="color:#fff;font-size:16px;font-weight:700;letter-spacing:0.5px;vertical-align:middle;">' . $esc($bannerLabel) . '</span>'
+        . '</td></tr>'
+        // Body
+        . '<tr><td style="background:#111827;padding:28px 32px;color:#e5eefb;">'
+        . $innerHtml
+        . '</td></tr>'
+        // Status page link
+        . '<tr><td style="background:#111827;padding:0 32px 20px;text-align:center;">'
+        . $statusLink
+        . '</td></tr>'
+        // Footer: ASN + org
+        . '<tr><td style="background:#0d1117;padding:16px 32px;text-align:center;">'
+        . '<span style="color:#475569;font-size:12px;">' . $esc($networkAsn) . ' &bull; ' . $esc($networkOrg) . '</span>'
+        . '</td></tr>'
+        // Unsubscribe (replaced per-subscriber)
+        . '{{UNSUB_FOOTER}}'
+        . '</table>'
+        . '</td></tr></table>'
+        . '</body></html>';
 }
 
 function notify_announcement(string $title, string $message, string $level, ?string $nodeName): void
 {
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
-    $levelUpper = strtoupper($level);
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
     $affected = $nodeName ?? 'All nodes';
+    $levelUpper = strtoupper($level);
 
     $subject = '[' . $networkAsn . '] ' . $levelUpper . ' — ' . $title;
 
     $colorMap = [
-        'info' => '#32D4C8',
+        'info' => '#4EA8FF',
         'maintenance' => '#F59E0B',
         'degraded' => '#F59E0B',
         'critical' => '#EF4444',
     ];
     $color = $colorMap[$level] ?? '#4EA8FF';
 
-    $bodyHtml = '<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">'
-        . '<div style="background:' . $color . ';color:#fff;padding:12px 20px;border-radius:8px 8px 0 0;font-weight:700;">' . htmlspecialchars($levelUpper, ENT_QUOTES, 'UTF-8') . '</div>'
-        . '<div style="background:#111827;color:#e5eefb;padding:20px;border:1px solid #1e293b;border-radius:0 0 8px 8px;">'
-        . '<h2 style="margin:0 0 12px;">' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</h2>'
-        . '<p style="color:#93a4bd;margin:0 0 8px;">Affected: ' . htmlspecialchars($affected, ENT_QUOTES, 'UTF-8') . '</p>'
-        . '<p style="margin:0;line-height:1.6;">' . nl2br(htmlspecialchars($message, ENT_QUOTES, 'UTF-8')) . '</p>'
-        . '<p style="margin:16px 0 0;font-size:12px;color:#64748b;">' . htmlspecialchars($networkAsn . ' • ' . $networkOrg, ENT_QUOTES, 'UTF-8') . '</p>'
-        . '</div></div>';
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 
+    $iconMap = [
+        'info' => "\xE2\x84\xB9\xEF\xB8\x8F",
+        'maintenance' => "\xF0\x9F\x94\xA7",
+        'degraded' => "\xE2\x9A\xA0\xEF\xB8\x8F",
+        'critical' => "\xF0\x9F\x9A\xA8",
+    ];
+    $icon = $iconMap[$level] ?? "\xE2\x84\xB9\xEF\xB8\x8F";
+
+    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">' . $esc($title) . '</h2>'
+        . '<table cellpadding="0" cellspacing="0" border="0" style="margin:12px 0 16px;">'
+        . '<tr>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;margin-right:8px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Severity</span><br>'
+        . '<span style="color:' . $color . ';font-weight:700;font-size:13px;">' . $esc($levelUpper) . '</span>'
+        . '</td>'
+        . '<td style="width:12px;"></td>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Affected</span><br>'
+        . '<span style="color:#e5eefb;font-weight:600;font-size:13px;">' . $esc($affected) . '</span>'
+        . '</td>'
+        . '</tr></table>'
+        . '<p style="margin:0;line-height:1.7;color:#cbd5e1;font-size:14px;">' . nl2br($esc($message)) . '</p>';
+
+    $bodyHtml = build_email_layout($color, $icon, $levelUpper, $inner, $networkAsn, $networkOrg, $baseUrl);
     $bodyText = $levelUpper . " — " . $title . "\nAffected: " . $affected . "\n\n" . $message . "\n\n" . $networkAsn . ' • ' . $networkOrg;
 
     notify_subscribers($subject, $bodyHtml, $bodyText);
@@ -2175,16 +2265,75 @@ function notify_announcement(string $title, string $message, string $level, ?str
 function notify_node_down(string $nodeName): void
 {
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+
     $subject = '[' . $networkAsn . '] NODE DOWN — ' . $nodeName;
 
-    $bodyHtml = '<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">'
-        . '<div style="background:#EF4444;color:#fff;padding:12px 20px;border-radius:8px 8px 0 0;font-weight:700;">NODE DOWN</div>'
-        . '<div style="background:#111827;color:#e5eefb;padding:20px;border:1px solid #1e293b;border-radius:0 0 8px 8px;">'
-        . '<h2 style="margin:0 0 12px;">' . htmlspecialchars($nodeName, ENT_QUOTES, 'UTF-8') . ' is unreachable</h2>'
-        . '<p style="margin:0;line-height:1.6;">The monitoring system detected that <strong>' . htmlspecialchars($nodeName, ENT_QUOTES, 'UTF-8') . '</strong> is not responding. The NOC team has been alerted.</p>'
-        . '</div></div>';
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 
+    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">' . $esc($nodeName) . ' is unreachable</h2>'
+        . '<p style="margin:8px 0 0;line-height:1.7;color:#cbd5e1;font-size:14px;">'
+        . 'The monitoring system detected that <strong style="color:#fff;">' . $esc($nodeName) . '</strong> is not responding.'
+        . '<br>An automatic incident has been created and the NOC team has been alerted.'
+        . '</p>'
+        . '<table cellpadding="0" cellspacing="0" border="0" style="margin:16px 0 0;">'
+        . '<tr>'
+        . '<td style="padding:6px 12px;background:rgba(239,68,68,0.1);border-radius:6px;border:1px solid rgba(239,68,68,0.2);">'
+        . '<span style="color:#EF4444;font-weight:700;font-size:13px;">&#9679; CRITICAL</span>'
+        . '</td>'
+        . '<td style="width:12px;"></td>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Node</span><br>'
+        . '<span style="color:#e5eefb;font-weight:600;font-size:13px;">' . $esc($nodeName) . '</span>'
+        . '</td>'
+        . '<td style="width:12px;"></td>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Detected</span><br>'
+        . '<span style="color:#e5eefb;font-weight:600;font-size:13px;">' . $esc(gmdate('Y-m-d H:i')) . ' UTC</span>'
+        . '</td>'
+        . '</tr></table>';
+
+    $bodyHtml = build_email_layout('#EF4444', "\xF0\x9F\x9A\xA8", 'NODE DOWN', $inner, $networkAsn, $networkOrg, $baseUrl);
     $bodyText = "NODE DOWN — " . $nodeName . "\n\nThe node is not responding. The NOC team has been alerted.";
+
+    notify_subscribers($subject, $bodyHtml, $bodyText);
+}
+
+function notify_node_recovered(string $nodeName): void
+{
+    $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
+
+    $subject = '[' . $networkAsn . '] NODE RECOVERED — ' . $nodeName;
+
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+
+    $inner = '<h2 style="margin:0 0 6px;font-size:20px;color:#fff;">' . $esc($nodeName) . ' is back online</h2>'
+        . '<p style="margin:8px 0 0;line-height:1.7;color:#cbd5e1;font-size:14px;">'
+        . '<strong style="color:#fff;">' . $esc($nodeName) . '</strong> has recovered and is responding normally.'
+        . '<br>The automatic incident has been resolved.'
+        . '</p>'
+        . '<table cellpadding="0" cellspacing="0" border="0" style="margin:16px 0 0;">'
+        . '<tr>'
+        . '<td style="padding:6px 12px;background:rgba(34,197,94,0.1);border-radius:6px;border:1px solid rgba(34,197,94,0.2);">'
+        . '<span style="color:#22C55E;font-weight:700;font-size:13px;">&#10003; RESOLVED</span>'
+        . '</td>'
+        . '<td style="width:12px;"></td>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Node</span><br>'
+        . '<span style="color:#e5eefb;font-weight:600;font-size:13px;">' . $esc($nodeName) . '</span>'
+        . '</td>'
+        . '<td style="width:12px;"></td>'
+        . '<td style="padding:6px 12px;background:rgba(255,255,255,0.05);border-radius:6px;">'
+        . '<span style="color:#94a3b8;font-size:12px;">Recovered</span><br>'
+        . '<span style="color:#e5eefb;font-weight:600;font-size:13px;">' . $esc(gmdate('Y-m-d H:i')) . ' UTC</span>'
+        . '</td>'
+        . '</tr></table>';
+
+    $bodyHtml = build_email_layout('#22C55E', "\xE2\x9C\x85", 'NODE RECOVERED', $inner, $networkAsn, $networkOrg, $baseUrl);
+    $bodyText = "NODE RECOVERED — " . $nodeName . "\n\nThe node is back online and responding normally.";
 
     notify_subscribers($subject, $bodyHtml, $bodyText);
 }
@@ -2198,13 +2347,14 @@ function dispatch_discord_node_down(string $nodeName, int $nodeId): void
 
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
 
     $payload = [
         'username' => $networkOrg . ' NOC',
         'embeds' => [
             [
                 'title' => "\xF0\x9F\x9A\xA8 NODE DOWN — " . $nodeName,
-                'description' => "**" . $nodeName . "** is not responding.\nAutomatic incident created. The NOC team has been alerted.\n\n[Status page](https://as201131.net) • [Subscribe to alerts](https://as201131.net/subscribe)",
+                'description' => "**" . $nodeName . "** is not responding.\nAutomatic incident created. The NOC team has been alerted." . ($baseUrl !== '' ? "\n\n[Status page](" . $baseUrl . ") • [Subscribe to alerts](" . $baseUrl . "/subscribe)" : ''),
                 'color' => 0xEF4444,
                 'fields' => [
                     ['name' => 'Status', 'value' => '`CRITICAL`', 'inline' => true],
@@ -2232,13 +2382,14 @@ function dispatch_discord_node_recovered(string $nodeName, int $nodeId): void
 
     $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
     $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+    $baseUrl = rtrim(get_state_value('site_base_url', ''), '/');
 
     $payload = [
         'username' => $networkOrg . ' NOC',
         'embeds' => [
             [
                 'title' => "\xE2\x9C\x85 NODE RECOVERED — " . $nodeName,
-                'description' => "**" . $nodeName . "** is back online.\nAutomatic incident resolved.\n\n[Status page](https://as201131.net) • [Subscribe to alerts](https://as201131.net/subscribe)",
+                'description' => "**" . $nodeName . "** is back online.\nAutomatic incident resolved." . ($baseUrl !== '' ? "\n\n[Status page](" . $baseUrl . ") • [Subscribe to alerts](" . $baseUrl . "/subscribe)" : ''),
                 'color' => 0x22C55E,
                 'fields' => [
                     ['name' => 'Status', 'value' => '`RESOLVED`', 'inline' => true],
