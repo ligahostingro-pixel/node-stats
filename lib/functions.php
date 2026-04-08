@@ -90,7 +90,6 @@ function ensure_storage(): void
     }
 
     db();
-    seed_default_local_node();
     seed_default_admin();
 }
 
@@ -1014,6 +1013,173 @@ function normalize_remote_metrics(?array $payload): array
     ];
 }
 
+function collect_via_ssh(string $host, int $port, string $user, string $password, string $netInterface = ''): array
+{
+    $emptyResult = static function (string $error): array {
+        return [
+            'status' => 'down',
+            'cpu_pct' => null, 'cpu_name' => null, 'cpu_cores' => null,
+            'hostname' => null, 'os_name' => null,
+            'mem_total_mb' => null, 'mem_used_mb' => null, 'mem_used_pct' => null,
+            'swap_total_mb' => null, 'swap_used_mb' => null, 'swap_used_pct' => null,
+            'disk_total_gb' => null, 'disk_used_gb' => null, 'disk_used_pct' => null,
+            'net_rx_bytes' => null, 'net_tx_bytes' => null,
+            'load1' => null, 'load5' => null, 'load15' => null,
+            'uptime_seconds' => null, 'error_text' => $error,
+        ];
+    };
+
+    if (!function_exists('ssh2_connect')) {
+        return $emptyResult('PHP ssh2 extension not installed');
+    }
+
+    $conn = @ssh2_connect($host, $port);
+    if ($conn === false) {
+        return $emptyResult('SSH connection failed to ' . $host . ':' . $port);
+    }
+
+    if (!@ssh2_auth_password($conn, $user, $password)) {
+        return $emptyResult('SSH auth failed for ' . $user . '@' . $host);
+    }
+
+    // Build a one-liner that outputs JSON with all metrics
+    $netIfaceFilter = $netInterface !== '' ? escapeshellarg($netInterface) : '';
+    $script = <<<'BASH'
+echo "{"
+# hostname
+printf '"hostname":"%s",' "$(hostname)"
+printf '"os_name":"%s %s",' "$(uname -s)" "$(uname -r)"
+
+# uptime
+UT=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+printf '"uptime_seconds":%s,' "${UT:-null}"
+
+# load
+read L1 L5 L15 _ < /proc/loadavg 2>/dev/null
+printf '"load1":%s,"load5":%s,"load15":%s,' "${L1:-null}" "${L5:-null}" "${L15:-null}"
+
+# cpu info
+CPUNAME=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//' | sed 's/"/\\"/g')
+CORES=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+printf '"cpu_name":"%s","cpu_cores":%s,' "$CPUNAME" "${CORES:-null}"
+
+# cpu usage (2 samples, 200ms apart)
+read -r _ U1 N1 S1 I1 W1 Q1 X1 < /proc/stat 2>/dev/null
+sleep 0.2
+read -r _ U2 N2 S2 I2 W2 Q2 X2 < /proc/stat 2>/dev/null
+T1=$((U1+N1+S1+I1+W1+Q1+X1)); T2=$((U2+N2+S2+I2+W2+Q2+X2))
+DT=$((T2-T1)); DI=$((I2-I1+W2-W1))
+if [ "$DT" -gt 0 ] 2>/dev/null; then
+  CPU=$(awk "BEGIN{printf \"%.2f\", (1-${DI}/${DT})*100}")
+else
+  CPU="null"
+fi
+printf '"cpu_pct":%s,' "$CPU"
+
+# memory
+MT=$(awk '/^MemTotal/{print $2}' /proc/meminfo)
+MA=$(awk '/^MemAvailable/{print $2}' /proc/meminfo)
+MU=$((MT-MA))
+MTMB=$(awk "BEGIN{printf \"%.2f\", ${MT:-0}/1024}")
+MUMB=$(awk "BEGIN{printf \"%.2f\", ${MU:-0}/1024}")
+MUPCT=$(awk "BEGIN{if(${MT:-0}>0) printf \"%.2f\", ${MU}/${MT}*100; else print 0}")
+printf '"mem_total_mb":%s,"mem_used_mb":%s,"mem_used_pct":%s,' "$MTMB" "$MUMB" "$MUPCT"
+
+# swap
+ST=$(awk '/^SwapTotal/{print $2}' /proc/meminfo)
+SF=$(awk '/^SwapFree/{print $2}' /proc/meminfo)
+SU=$((${ST:-0}-${SF:-0}))
+STMB=$(awk "BEGIN{printf \"%.2f\", ${ST:-0}/1024}")
+SUMB=$(awk "BEGIN{printf \"%.2f\", ${SU:-0}/1024}")
+SUPCT=$(awk "BEGIN{if(${ST:-0}>0) printf \"%.2f\", ${SU}/${ST}*100; else print 0}")
+printf '"swap_total_mb":%s,"swap_used_mb":%s,"swap_used_pct":%s,' "$STMB" "$SUMB" "$SUPCT"
+
+# disk
+DINFO=$(df -B1 / 2>/dev/null | awk 'NR==2{print $2,$3}')
+DTOTAL=$(echo "$DINFO" | awk '{print $1}')
+DUSED=$(echo "$DINFO" | awk '{print $2}')
+DTGB=$(awk "BEGIN{printf \"%.2f\", ${DTOTAL:-0}/1073741824}")
+DUGB=$(awk "BEGIN{printf \"%.2f\", ${DUSED:-0}/1073741824}")
+DUPCT=$(awk "BEGIN{if(${DTOTAL:-0}>0) printf \"%.2f\", ${DUSED}/${DTOTAL}*100; else print 0}")
+printf '"disk_total_gb":%s,"disk_used_gb":%s,"disk_used_pct":%s,' "$DTGB" "$DUGB" "$DUPCT"
+
+# network
+BASH;
+
+    if ($netIfaceFilter !== '') {
+        $script .= <<<BASH
+
+NETIFACE={$netIfaceFilter}
+RX=\$(awk -v iface="\$NETIFACE:" '\$1==iface{gsub(/[^0-9]/,"",\$2); print \$2}' /proc/net/dev 2>/dev/null)
+TX=\$(awk -v iface="\$NETIFACE:" '\$1==iface{print \$10}' /proc/net/dev 2>/dev/null)
+BASH;
+    } else {
+        $script .= <<<'BASH'
+
+RX=$(awk 'NR>2 && $1!="lo:"{gsub(/:/,"",$1); rx+=$2; tx+=$10} END{print rx+0}' /proc/net/dev 2>/dev/null)
+TX=$(awk 'NR>2 && $1!="lo:"{gsub(/:/,"",$1); tx+=$10} END{print tx+0}' /proc/net/dev 2>/dev/null)
+BASH;
+    }
+
+    $script .= <<<'BASH'
+
+printf '"net_rx_bytes":%s,"net_tx_bytes":%s' "${RX:-0}" "${TX:-0}"
+echo "}"
+BASH;
+
+    $stream = @ssh2_exec($conn, $script);
+    if ($stream === false) {
+        return $emptyResult('SSH command execution failed');
+    }
+
+    stream_set_blocking($stream, true);
+    stream_set_timeout($stream, 10);
+    $output = stream_get_contents($stream);
+    fclose($stream);
+
+    if (!is_string($output) || $output === '') {
+        return $emptyResult('SSH returned empty output');
+    }
+
+    $data = json_decode($output, true);
+    if (!is_array($data)) {
+        return $emptyResult('SSH returned invalid JSON: ' . substr($output, 0, 200));
+    }
+
+    // Determine status
+    $cpu = is_numeric($data['cpu_pct'] ?? null) ? (float)$data['cpu_pct'] : null;
+    $memPct = is_numeric($data['mem_used_pct'] ?? null) ? (float)$data['mem_used_pct'] : null;
+    $status = 'up';
+    if (($cpu !== null && $cpu >= 92) || ($memPct !== null && $memPct >= 95)) {
+        $status = 'degraded';
+    }
+
+    return [
+        'status' => $status,
+        'cpu_pct' => $cpu,
+        'cpu_name' => is_string($data['cpu_name'] ?? null) ? substr(trim($data['cpu_name']), 0, 255) : null,
+        'cpu_cores' => is_numeric($data['cpu_cores'] ?? null) ? (int)$data['cpu_cores'] : null,
+        'hostname' => is_string($data['hostname'] ?? null) ? substr(trim($data['hostname']), 0, 120) : null,
+        'os_name' => is_string($data['os_name'] ?? null) ? substr(trim($data['os_name']), 0, 180) : null,
+        'mem_total_mb' => is_numeric($data['mem_total_mb'] ?? null) ? (float)$data['mem_total_mb'] : null,
+        'mem_used_mb' => is_numeric($data['mem_used_mb'] ?? null) ? (float)$data['mem_used_mb'] : null,
+        'mem_used_pct' => $memPct,
+        'swap_total_mb' => is_numeric($data['swap_total_mb'] ?? null) ? (float)$data['swap_total_mb'] : null,
+        'swap_used_mb' => is_numeric($data['swap_used_mb'] ?? null) ? (float)$data['swap_used_mb'] : null,
+        'swap_used_pct' => is_numeric($data['swap_used_pct'] ?? null) ? (float)$data['swap_used_pct'] : null,
+        'disk_total_gb' => is_numeric($data['disk_total_gb'] ?? null) ? (float)$data['disk_total_gb'] : null,
+        'disk_used_gb' => is_numeric($data['disk_used_gb'] ?? null) ? (float)$data['disk_used_gb'] : null,
+        'disk_used_pct' => is_numeric($data['disk_used_pct'] ?? null) ? (float)$data['disk_used_pct'] : null,
+        'net_rx_bytes' => is_numeric($data['net_rx_bytes'] ?? null) ? (int)$data['net_rx_bytes'] : null,
+        'net_tx_bytes' => is_numeric($data['net_tx_bytes'] ?? null) ? (int)$data['net_tx_bytes'] : null,
+        'load1' => is_numeric($data['load1'] ?? null) ? (float)$data['load1'] : null,
+        'load5' => is_numeric($data['load5'] ?? null) ? (float)$data['load5'] : null,
+        'load15' => is_numeric($data['load15'] ?? null) ? (float)$data['load15'] : null,
+        'uptime_seconds' => is_numeric($data['uptime_seconds'] ?? null) ? (int)$data['uptime_seconds'] : null,
+        'error_text' => null,
+    ];
+}
+
 function collect_node_metrics(array $node): array
 {
     if (($node['node_type'] ?? 'remote') === 'local') {
@@ -1028,34 +1194,35 @@ function collect_node_metrics(array $node): array
         return $data;
     }
 
-    if (trim((string)($node['endpoint_url'] ?? '')) === '') {
-        return [
-            'status' => 'down',
-            'cpu_pct' => null,
-            'cpu_name' => null,
-            'cpu_cores' => null,
-            'hostname' => null,
-            'os_name' => null,
-            'mem_total_mb' => null,
-            'mem_used_mb' => null,
-            'mem_used_pct' => null,
-            'swap_total_mb' => null,
-            'swap_used_mb' => null,
-            'swap_used_pct' => null,
-            'disk_total_gb' => null,
-            'disk_used_gb' => null,
-            'disk_used_pct' => null,
-            'net_rx_bytes' => null,
-            'net_tx_bytes' => null,
-            'load1' => null,
-            'load5' => null,
-            'load15' => null,
-            'error_text' => 'No remote agent endpoint configured',
-        ];
+    // Try HTTP agent first
+    if (trim((string)($node['endpoint_url'] ?? '')) !== '') {
+        $url = build_remote_url((string)($node['endpoint_url'] ?? ''), (string)($node['api_token'] ?? ''));
+        return normalize_remote_metrics(http_get_json($url));
     }
 
-    $url = build_remote_url((string)($node['endpoint_url'] ?? ''), (string)($node['api_token'] ?? ''));
-    return normalize_remote_metrics(http_get_json($url));
+    // Try SSH
+    if (trim((string)($node['ssh_host'] ?? '')) !== '') {
+        return collect_via_ssh(
+            (string)$node['ssh_host'],
+            ((int)($node['ssh_port'] ?? 0)) > 0 ? (int)$node['ssh_port'] : 22,
+            (string)($node['ssh_user'] ?? 'root'),
+            (string)($node['ssh_password'] ?? ''),
+            (string)($node['net_interface'] ?? '')
+        );
+    }
+
+    return [
+        'status' => 'down',
+        'cpu_pct' => null, 'cpu_name' => null, 'cpu_cores' => null,
+        'hostname' => null, 'os_name' => null,
+        'mem_total_mb' => null, 'mem_used_mb' => null, 'mem_used_pct' => null,
+        'swap_total_mb' => null, 'swap_used_mb' => null, 'swap_used_pct' => null,
+        'disk_total_gb' => null, 'disk_used_gb' => null, 'disk_used_pct' => null,
+        'net_rx_bytes' => null, 'net_tx_bytes' => null,
+        'load1' => null, 'load5' => null, 'load15' => null,
+        'uptime_seconds' => null,
+        'error_text' => 'No endpoint URL or SSH credentials configured',
+    ];
 }
 
 function insert_sample(int $nodeId, int $timestamp, array $data): void
@@ -1136,6 +1303,12 @@ function maybe_collect_sample(int $intervalSeconds = SAMPLE_INTERVAL_SECONDS, bo
         $newStatus = (string)($sample['status'] ?? 'unknown');
         if ($newStatus === 'down' && $prevStatus !== 'down') {
             notify_node_down((string)$node['name']);
+            dispatch_discord_node_down((string)$node['name'], (int)$node['id']);
+            auto_create_downtime_announcement((string)$node['name'], (int)$node['id']);
+        }
+        if ($newStatus !== 'down' && $prevStatus === 'down') {
+            dispatch_discord_node_recovered((string)$node['name'], (int)$node['id']);
+            auto_resolve_downtime_announcement((int)$node['id']);
         }
     }
 
@@ -1792,4 +1965,148 @@ function notify_node_down(string $nodeName): void
     $bodyText = "NODE DOWN — " . $nodeName . "\n\nThe node is not responding. The NOC team has been alerted.";
 
     notify_subscribers($subject, $bodyHtml, $bodyText);
+}
+
+function dispatch_discord_node_down(string $nodeName, int $nodeId): void
+{
+    $webhookUrl = trim(get_state_value('discord_webhook_url', ''));
+    if ($webhookUrl === '' || !filter_var($webhookUrl, FILTER_VALIDATE_URL)) {
+        return;
+    }
+
+    $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+
+    $payload = [
+        'username' => $networkOrg . ' NOC',
+        'embeds' => [
+            [
+                'title' => "\xF0\x9F\x9A\xA8 NODE DOWN — " . $nodeName,
+                'description' => "**" . $nodeName . "** is not responding.\nAutomatic incident created. The NOC team has been alerted.",
+                'color' => 0xEF4444,
+                'fields' => [
+                    ['name' => 'Status', 'value' => '`CRITICAL`', 'inline' => true],
+                    ['name' => 'Affected', 'value' => $nodeName, 'inline' => true],
+                    ['name' => 'Detected', 'value' => '<t:' . time() . ':R>', 'inline' => true],
+                ],
+                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg . ' Status'],
+                'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ],
+    ];
+
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($json !== false) {
+        send_discord_payload($webhookUrl, $json);
+    }
+}
+
+function dispatch_discord_node_recovered(string $nodeName, int $nodeId): void
+{
+    $webhookUrl = trim(get_state_value('discord_webhook_url', ''));
+    if ($webhookUrl === '' || !filter_var($webhookUrl, FILTER_VALIDATE_URL)) {
+        return;
+    }
+
+    $networkAsn = trim(get_state_value('network_asn', 'AS201131'));
+    $networkOrg = trim(get_state_value('network_org', 'LIGA HOSTING LTD'));
+
+    $payload = [
+        'username' => $networkOrg . ' NOC',
+        'embeds' => [
+            [
+                'title' => "\xE2\x9C\x85 NODE RECOVERED — " . $nodeName,
+                'description' => "**" . $nodeName . "** is back online.\nAutomatic incident resolved.",
+                'color' => 0x22C55E,
+                'fields' => [
+                    ['name' => 'Status', 'value' => '`RESOLVED`', 'inline' => true],
+                    ['name' => 'Affected', 'value' => $nodeName, 'inline' => true],
+                    ['name' => 'Recovered', 'value' => '<t:' . time() . ':R>', 'inline' => true],
+                ],
+                'footer' => ['text' => $networkAsn . ' • ' . $networkOrg . ' Status'],
+                'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ],
+    ];
+
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($json !== false) {
+        send_discord_payload($webhookUrl, $json);
+    }
+}
+
+function auto_create_downtime_announcement(string $nodeName, int $nodeId): void
+{
+    // Check if there's already an unresolved auto-announcement for this node
+    $stmt = db()->prepare(
+        "SELECT id FROM announcements
+         WHERE node_id = :nid AND level = 'critical' AND resolved_at IS NULL
+         AND title LIKE '[AUTO]%'
+         LIMIT 1"
+    );
+    $stmt->execute([':nid' => $nodeId]);
+    if ($stmt->fetch()) {
+        return; // already exists
+    }
+
+    $now = time();
+    $insert = db()->prepare(
+        'INSERT INTO announcements (title, message, level, node_id, starts_at, ends_at, pinned, resolved_at, created_at, created_by)
+         VALUES (:title, :message, :level, :node_id, :starts_at, NULL, 1, NULL, :created_at, :created_by)'
+    );
+    $insert->execute([
+        ':title' => '[AUTO] ' . $nodeName . ' — Node Down',
+        ':message' => 'Automatic alert: ' . $nodeName . ' is not responding. Our monitoring system detected this outage and created this incident automatically. The team is investigating.',
+        ':level' => 'critical',
+        ':node_id' => $nodeId,
+        ':starts_at' => $now,
+        ':created_at' => $now,
+        ':created_by' => 'system',
+    ]);
+
+    $annId = (int)db()->lastInsertId();
+    if ($annId > 0) {
+        $upd = db()->prepare(
+            'INSERT INTO announcement_updates (announcement_id, message, status, created_at, created_by)
+             VALUES (:aid, :message, :status, :created_at, :created_by)'
+        );
+        $upd->execute([
+            ':aid' => $annId,
+            ':message' => 'Node detected as unreachable. Automatic incident opened.',
+            ':status' => 'investigating',
+            ':created_at' => $now,
+            ':created_by' => 'system',
+        ]);
+    }
+}
+
+function auto_resolve_downtime_announcement(int $nodeId): void
+{
+    $stmt = db()->prepare(
+        "SELECT id FROM announcements
+         WHERE node_id = :nid AND level = 'critical' AND resolved_at IS NULL
+         AND title LIKE '[AUTO]%'"
+    );
+    $stmt->execute([':nid' => $nodeId]);
+    $rows = $stmt->fetchAll();
+
+    $now = time();
+    foreach ($rows as $row) {
+        $annId = (int)$row['id'];
+
+        $res = db()->prepare('UPDATE announcements SET resolved_at = :ts WHERE id = :id');
+        $res->execute([':ts' => $now, ':id' => $annId]);
+
+        $upd = db()->prepare(
+            'INSERT INTO announcement_updates (announcement_id, message, status, created_at, created_by)
+             VALUES (:aid, :message, :status, :created_at, :created_by)'
+        );
+        $upd->execute([
+            ':aid' => $annId,
+            ':message' => 'Node is back online. Incident resolved automatically.',
+            ':status' => 'resolved',
+            ':created_at' => $now,
+            ':created_by' => 'system',
+        ]);
+    }
 }
