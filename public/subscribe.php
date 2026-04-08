@@ -43,7 +43,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $csrfToken = (string)($_POST['csrf_token'] ?? '');
     $postAction = (string)($_POST['action'] ?? '');
 
-    if (csrf_valid($csrfToken) && $postAction === 'subscribe') {
+    if (!csrf_valid($csrfToken)) {
+        error_log('[NOC] subscribe.php CSRF failed. session_id=' . session_id()
+            . ' session_csrf=' . ($_SESSION['csrf_token'] ?? '(none)')
+            . ' post_csrf=' . substr($csrfToken, 0, 16) . '...'
+            . ' action=' . $postAction
+            . ' cookie=' . (isset($_COOKIE[session_name()]) ? 'yes' : 'no'));
+        $message = 'Session expired. Please try again.';
+        $messageType = 'error';
+    } elseif ($postAction === 'subscribe') {
         $email = (string)($_POST['email'] ?? '');
         $result = subscribe_email($email);
         if ($result['ok']) {
@@ -53,9 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = (string)($result['error'] ?? 'Could not subscribe.');
             $messageType = 'error';
         }
-    }
-
-    if (csrf_valid($csrfToken) && $postAction === 'unsubscribe_email') {
+    } elseif ($postAction === 'unsubscribe_email') {
         $email = (string)($_POST['email'] ?? '');
         try {
             $unsubOk = send_unsubscribe_email($email);
