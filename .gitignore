@@ -1,4 +1,9 @@
+# Runtime data
 data/collector.lock
+data/samples/
 data/status.sqlite
 data/status.sqlite-shm
 data/status.sqlite-wal
+
+# Temp/junk
+add_node_temp.php

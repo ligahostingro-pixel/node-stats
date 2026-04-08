@@ -8,7 +8,7 @@ const APP_NAME = 'Node Status';
 const DATA_DIR = __DIR__ . '/data';
 const SAMPLES_DIR = DATA_DIR . '/samples';
 const LOCK_FILE = DATA_DIR . '/collector.lock';
-const SAMPLE_INTERVAL_SECONDS = 300;
+const SAMPLE_INTERVAL_SECONDS = 60;
 const MAX_DAYS_TO_KEEP = 30;
 
 /* ── MariaDB / MySQL connection ─────────────────────────────── */

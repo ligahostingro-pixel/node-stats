@@ -1,0 +1,36 @@
+# ─── Node Status — Apache config for DocumentRoot (public/) ───
+# Point your Apache VirtualHost to this folder:
+#   DocumentRoot /var/www/node-stats/public
+
+# Disable directory listing
+Options -Indexes
+
+# Deny access to dotfiles (except this .htaccess)
+<FilesMatch "^\.(?!htaccess)">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Security headers (fallback if PHP headers fail)
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Compress text responses
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/css text/javascript application/javascript application/json
+</IfModule>
+
+# Cache static assets
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 7 days"
+    ExpiresByType image/svg+xml "access plus 7 days"
+</IfModule>

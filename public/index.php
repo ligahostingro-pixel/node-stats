@@ -313,7 +313,7 @@ foreach ($nodesByCountry as $cc => $info) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="300">
+  <meta http-equiv="refresh" content="60">
   <meta name="description" content="Real-time infrastructure status and uptime monitoring for <?= e($networkOrg) ?> (<?= e($networkAsn) ?>). View fleet health, network locations, and operational announcements.">
   <meta name="robots" content="index, follow">
   <meta property="og:title" content="<?= e(APP_NAME) ?> - <?= e($networkOrg) ?>">
@@ -383,7 +383,7 @@ foreach ($nodesByCountry as $cc => $info) {
         </div>
         <div class="hero-stat">
           <span class="hero-label">Collect interval</span>
-          <strong>5 min</strong>
+          <strong>1 min</strong>
         </div>
         <div class="hero-stat">
           <span class="hero-label">Locations</span>
@@ -915,7 +915,7 @@ foreach ($nodesByCountry as $cc => $info) {
       <div class="footer-right">
         <span>Last refresh <?= e(date('H:i:s')) ?> UTC</span>
         <span class="footer-sep">&bull;</span>
-        <span>Auto-refresh 5 min</span>
+        <span>Auto-refresh 1 min</span>
       </div>
     </div>
   </footer>

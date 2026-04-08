@@ -112,7 +112,7 @@ $statusText = match ($liveStatus) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="300">
+  <meta http-equiv="refresh" content="60">
   <meta name="description" content="Detailed metrics and uptime history for <?= $selectedNode !== null ? e((string)$selectedNode['name']) : 'node' ?> — CPU, RAM, disk, network monitoring.">
   <meta name="robots" content="index, follow">
   <title><?= e(APP_NAME) ?> - <?= $selectedNode !== null ? e((string)$selectedNode['name']) : 'Node Details' ?></title>
@@ -480,7 +480,7 @@ $statusText = match ($liveStatus) {
       <div class="footer-right">
         <span>Last refresh <?= e(date('H:i:s')) ?> UTC</span>
         <span class="footer-sep">&bull;</span>
-        <span>Auto-refresh 5 min</span>
+        <span>Auto-refresh 1 min</span>
       </div>
     </div>
   </footer>
