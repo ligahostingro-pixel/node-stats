@@ -2384,13 +2384,14 @@ function smtp_send_email(string $to, string $subject, string $bodyHtml, string $
         . 'Subject: ' . $subject . "\r\n"
         . 'MIME-Version: 1.0' . "\r\n"
         . 'Content-Type: text/html; charset=UTF-8' . "\r\n"
+        . 'Content-Transfer-Encoding: base64' . "\r\n"
         . 'Reply-To: ' . $fromEmail . "\r\n";
 
     foreach ($extraHeaders as $h) {
         $headers .= $h . "\r\n";
     }
 
-    $body = str_replace("\r\n.", "\r\n..", $bodyHtml);
+    $body = rtrim(chunk_split(base64_encode($bodyHtml), 76, "\r\n"));
     $endResp = $send($headers . "\r\n" . $body . "\r\n.");
 
     $send('QUIT');
