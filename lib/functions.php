@@ -1520,26 +1520,43 @@ function maybe_collect_sample(int $intervalSeconds = SAMPLE_INTERVAL_SECONDS, bo
 
     foreach ($nodes as $node) {
         $nodeId = (int)$node['id'];
-        $prevSample = latest_sample_for_node($nodeId);
-        $prevStatus = $prevSample !== null ? (string)($prevSample['status'] ?? 'unknown') : 'unknown';
+        $prevSamples = latest_samples_for_node($nodeId, 2);
+        $prevStatus  = isset($prevSamples[0]) ? (string)($prevSamples[0]['status'] ?? 'unknown') : 'unknown';
+        $prevPrevStatus = isset($prevSamples[1]) ? (string)($prevSamples[1]['status'] ?? 'unknown') : 'unknown';
 
         $sample = collect_node_metrics($node);
+        $newStatus = (string)($sample['status'] ?? 'unknown');
+
+        // Instant retry: if check failed, retry once — if retry succeeds, use success
+        if ($newStatus === 'down') {
+            error_log('[NOC] Node ' . $nodeId . ' (' . $node['name'] . ') down, retrying once...');
+            usleep(500000); // 0.5s pause before retry
+            $retry = collect_node_metrics($node);
+            $retryStatus = (string)($retry['status'] ?? 'unknown');
+            if ($retryStatus !== 'down') {
+                error_log('[NOC] Node ' . $nodeId . ' (' . $node['name'] . ') retry succeeded → ' . $retryStatus);
+                $sample = $retry;
+                $newStatus = $retryStatus;
+            } else {
+                error_log('[NOC] Node ' . $nodeId . ' (' . $node['name'] . ') retry also failed → down');
+            }
+        }
+
         insert_sample($nodeId, $now, $sample);
         $count++;
 
-        $newStatus = (string)($sample['status'] ?? 'unknown');
         $downAlerted = get_state_value('node_' . $nodeId . '_down_alerted', '0') === '1';
 
-        // Alert only after 2 consecutive "down" checks to avoid false alarms
-        if ($newStatus === 'down' && $prevStatus === 'down' && !$downAlerted) {
+        // Alert only after 3 consecutive "down" checks to avoid false alarms
+        if ($newStatus === 'down' && $prevStatus === 'down' && $prevPrevStatus === 'down' && !$downAlerted) {
             set_state_value('node_' . $nodeId . '_down_alerted', '1');
             error_log('[NOC] DOWN alert fired for node ' . $nodeId . ' (' . $node['name'] . ')');
             notify_node_down((string)$node['name']);
             dispatch_discord_node_down((string)$node['name'], $nodeId);
             auto_create_downtime_announcement((string)$node['name'], $nodeId);
         }
-        // Recover only after 2 consecutive "not down" checks AND a down alert was actually sent
-        if ($newStatus !== 'down' && $prevStatus !== 'down' && $downAlerted) {
+        // Recover only after 3 consecutive "not down" checks AND a down alert was actually sent
+        if ($newStatus !== 'down' && $prevStatus !== 'down' && $prevPrevStatus !== 'down' && $downAlerted) {
             set_state_value('node_' . $nodeId . '_down_alerted', '0');
             error_log('[NOC] RECOVERY alert fired for node ' . $nodeId . ' (' . $node['name'] . ')');
             notify_node_recovered((string)$node['name']);
