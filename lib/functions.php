@@ -1783,16 +1783,28 @@ function node_day_status(int $nodeId, string $date): string
 
     $down = 0;
     $degraded = 0;
+    $consecutiveDown = 0;
+    $realDown = 0;
     foreach ($samples as $sample) {
         $status = (string)($sample['status'] ?? 'unknown');
         if ($status === 'down') {
+            $consecutiveDown++;
             $down++;
-        } elseif ($status === 'degraded') {
-            $degraded++;
+        } else {
+            if ($consecutiveDown >= 3) {
+                $realDown += $consecutiveDown;
+            }
+            $consecutiveDown = 0;
+            if ($status === 'degraded') {
+                $degraded++;
+            }
         }
     }
+    if ($consecutiveDown >= 3) {
+        $realDown += $consecutiveDown;
+    }
 
-    if ($down > 0) {
+    if ($realDown > 0) {
         return 'down';
     }
 
@@ -1819,27 +1831,50 @@ function bulk_node_day_statuses(array $dates): array
         return [];
     }
 
+    // Fetch individual samples ordered by node and time to detect consecutive runs
     $stmt = db()->prepare(
-        "SELECT node_id,
-                DATE(FROM_UNIXTIME(ts)) AS day,
-                SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_count,
-                SUM(CASE WHEN status = 'degraded' THEN 1 ELSE 0 END) AS degraded_count,
-                COUNT(*) AS total_count
+        "SELECT node_id, DATE(FROM_UNIXTIME(ts)) AS day, status
          FROM samples
          WHERE ts BETWEEN :start_ts AND :end_ts
-         GROUP BY node_id, DATE(FROM_UNIXTIME(ts))"
+         ORDER BY node_id, ts ASC"
     );
     $stmt->execute([':start_ts' => $startTs, ':end_ts' => $endTs]);
     $rows = $stmt->fetchAll();
 
-    $map = [];
+    // Group samples by node_id + day
+    $grouped = [];
     foreach ($rows as $row) {
-        $nid = (int)$row['node_id'];
-        $day = (string)$row['day'];
-        $down = (int)$row['down_count'];
-        $degraded = (int)$row['degraded_count'];
+        $key = (int)$row['node_id'] . '|' . (string)$row['day'];
+        $grouped[$key][] = (string)($row['status'] ?? 'unknown');
+    }
 
-        if ($down > 0) {
+    $map = [];
+    foreach ($grouped as $key => $statuses) {
+        [$nid, $day] = explode('|', $key, 2);
+        $nid = (int)$nid;
+
+        $consecutiveDown = 0;
+        $realDown = 0;
+        $degraded = 0;
+
+        foreach ($statuses as $s) {
+            if ($s === 'down') {
+                $consecutiveDown++;
+            } else {
+                if ($consecutiveDown >= 3) {
+                    $realDown += $consecutiveDown;
+                }
+                $consecutiveDown = 0;
+                if ($s === 'degraded') {
+                    $degraded++;
+                }
+            }
+        }
+        if ($consecutiveDown >= 3) {
+            $realDown += $consecutiveDown;
+        }
+
+        if ($realDown > 0) {
             $status = 'down';
         } elseif ($degraded > 0) {
             $status = 'degraded';
@@ -1864,26 +1899,39 @@ function node_uptime_percent(int $nodeId, int $days = 30): ?float
     }
 
     $stmt = db()->prepare(
-        "SELECT
-            COUNT(*) AS total_count,
-            SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count
-         FROM samples
-         WHERE node_id = :node_id AND ts >= :start_ts"
+        "SELECT status FROM samples
+         WHERE node_id = :node_id AND ts >= :start_ts
+         ORDER BY ts ASC"
     );
-
     $stmt->execute([
         ':node_id' => $nodeId,
         ':start_ts' => $start,
     ]);
+    $rows = $stmt->fetchAll();
 
-    $row = $stmt->fetch();
-    $total = (int)($row['total_count'] ?? 0);
-    $up = (int)($row['up_count'] ?? 0);
-
+    $total = count($rows);
     if ($total === 0) {
         return null;
     }
 
+    // Count only 3+ consecutive downs as real downtime
+    $consecutiveDown = 0;
+    $realDown = 0;
+    foreach ($rows as $row) {
+        if (($row['status'] ?? 'unknown') === 'down') {
+            $consecutiveDown++;
+        } else {
+            if ($consecutiveDown >= 3) {
+                $realDown += $consecutiveDown;
+            }
+            $consecutiveDown = 0;
+        }
+    }
+    if ($consecutiveDown >= 3) {
+        $realDown += $consecutiveDown;
+    }
+
+    $up = $total - $realDown;
     return round(($up / $total) * 100, 4);
 }
 
@@ -1899,21 +1947,38 @@ function bulk_node_uptime_percent(int $days = 30): array
     }
 
     $stmt = db()->prepare(
-        "SELECT node_id,
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count
-         FROM samples
+        "SELECT node_id, status FROM samples
          WHERE ts >= :start_ts
-         GROUP BY node_id"
+         ORDER BY node_id, ts ASC"
     );
     $stmt->execute([':start_ts' => $start]);
     $rows = $stmt->fetchAll();
 
-    $map = [];
+    // Group by node
+    $byNode = [];
     foreach ($rows as $row) {
-        $nid = (int)$row['node_id'];
-        $total = (int)$row['total_count'];
-        $up = (int)$row['up_count'];
+        $byNode[(int)$row['node_id']][] = (string)($row['status'] ?? 'unknown');
+    }
+
+    $map = [];
+    foreach ($byNode as $nid => $statuses) {
+        $total = count($statuses);
+        $consecutiveDown = 0;
+        $realDown = 0;
+        foreach ($statuses as $s) {
+            if ($s === 'down') {
+                $consecutiveDown++;
+            } else {
+                if ($consecutiveDown >= 3) {
+                    $realDown += $consecutiveDown;
+                }
+                $consecutiveDown = 0;
+            }
+        }
+        if ($consecutiveDown >= 3) {
+            $realDown += $consecutiveDown;
+        }
+        $up = $total - $realDown;
         $map[$nid] = $total > 0 ? round(($up / $total) * 100, 4) : null;
     }
     return $map;
